@@ -1,0 +1,25 @@
+[project]
+name = "podcast-engine-python"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143.0",
+    "httpx>=0.28.1",
+    "openai>=3.29.0",
+    "pydantic>=2.14.0",
+    "pydantic-settings>=2.15.0",
+    "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
+    "structlog>=26.1.0",
+    "tenacity>=9.2.1",
+]
+
+[[tool.uv.index]]
+url = "http://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
