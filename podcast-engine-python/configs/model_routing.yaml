@@ -1,0 +1,35 @@
+aliases:
+  plot_planner:
+    provider: dashscope
+    model: qwen-max
+    temperature: 0.2
+    fallbacks:
+      - provider: deepseek
+        model: deepseek-chat
+
+  podcaster:
+    provider: dashscope
+    model: qwen-plus
+    temperature: 0.7
+    fallbacks:
+      - provider: openai
+        model: gpt-4o-mini
+
+  fast_cheap:
+    provider: dashscope
+    model: qwen-turbo
+    temperature: 0.3
+
+  judge:
+    provider: deepseek
+    model: deepseek-chat
+    temperature: 0.0
+
+  # 世界线插值：A 锚点 -> B 锚点之间的剧情补全
+  worldline:
+    provider: aliyun_maas
+    model: qwen3.8-flash
+    temperature: 0.7
+    fallbacks:
+      - provider: dashscope
+        model: qwen-plus

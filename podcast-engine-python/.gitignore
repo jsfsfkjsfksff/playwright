@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 虚拟环境（uv 生成的 .venv 自带 .gitignore，这里兜底，防止换工具重建）
+.venv/
+venv/
+env/
+
+# 测试与工具产物
+.pytest_cache/
+.pytest-tmp/
+
+# 本地配置与生成物
+.env
+static/audio/

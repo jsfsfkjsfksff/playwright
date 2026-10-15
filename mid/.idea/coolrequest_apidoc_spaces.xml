@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="APIDocSpaces">
+    <option name="spaces">
+      <map>
+        <entry key="aigc">
+          <value>
+            <DirNode>
+              <option name="name" value="aigc" />
+            </DirNode>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
