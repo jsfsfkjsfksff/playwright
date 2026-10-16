@@ -3,6 +3,7 @@
   <component name="AdditionalModuleElements">
     <content url="file://$MODULE_DIR$" dumb="true">
       <excludeFolder url="file://$MODULE_DIR$/src/main/java/cn/edu/zut/aigcgal/DTO/AIResponseDto.java" />
+      <excludeFolder url="file://$MODULE_DIR$/src/main/java/cn/edu/zut/aigcgal/service/AIService.java" />
     </content>
   </component>
 </module>
