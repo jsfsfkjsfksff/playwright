@@ -1,0 +1,143 @@
+/**
+ * 日间主题（Day Theme）—— 预留接入位，当前**不生效、不制作视觉**
+ * ---------------------------------------------------------------
+ * 本阶段只做夜间模式，因此这里不提供任何日间配色。但「同名令牌」全部占好位：
+ * 每个令牌都声明为 `inherit`，即**原样继承夜间取值**，行为与现在完全一致。
+ *
+ * ── 占位令牌的机制（为什么是 inherit）────────────────────────────
+ * 夜间令牌定义在 :root（也就是 <html>）上。日间标识 `data-theme="day"` 同样
+ * 打在 <html> 上，所以日间规则必须落在 body 这一层才能「继承到夜间的值」：
+ *
+ *     [data-theme='day'] body { --nw-color-text-primary: inherit; }
+ *
+ * body 的 `inherit` 取到父级（html）的夜间取值，再沿继承链传给全部后代，
+ * 页面表现与夜间完全相同。将来设计定稿时，把需要变化的那些行改成浅色取值即可，
+ * 页面、组件与交互逻辑都不用动。
+ *
+ * 这样做的两个好处：
+ *   1. 令牌清单是**可枚举、可校验**的：与 themes/night.css 一一对应，不缺不溢；
+ *   2. 不写死任何颜色，也不存在「未定义令牌」导致取值失效的风险。
+ *
+ * ── 已预留的接入接口（现状说明）──────────────────────────────────
+ * 1. 主题标识：根元素上的 `data-theme`。
+ *      无标识（或 `data-theme="night"`）→ 夜间主题，定义在 themes/night.css
+ *      `data-theme="day"`                 → 日间主题，取值写在本文件
+ * 2. 切换入口：src/composables/useTheme.ts
+ *      统一负责解析偏好并写入根元素标识；当前解析恒定为夜间，
+ *      接入日间时只需启用解析，并在本文件把占位改成真实取值。
+ * 3. 夜间专属效果已被单独封装，接入日间时按需覆盖即可，不会无条件生效：
+ *      - `.nw-glass`（styles/theme.css）：深色玻璃材质基类
+ *      - `.nw-page-backdrop`（components/base/PageBackdrop.vue）：统一背景图与压暗层
+ *      - `.nw-audio-orb`（components/audio/AudioOrb.vue）：球体辉光
+ *
+ * ── 后续正式开发日间模式时的步骤 ─────────────────────────────────
+ * a. 依据日间视觉参考，把下面 `inherit` 逐条替换为浅色取值
+ *    （不需要重写任何页面结构或组件样式）。
+ * b. 在 useTheme.ts 中启用日间解析（当前只解析到夜间为止）。
+ * c. 检查通用组件在浅色背景下的可读性与全部交互状态。
+ * d. 仅对确实需要差异化的背景装饰补充日间专属规则（例如光晕强度、玻璃不透明度）。
+ * e. 完成日间与夜间的视觉回归检查。
+ */
+
+[data-theme='day'] body {
+  /*
+   * 以下 96 项与 themes/night.css 完全同名同序，
+   * 取值统一为 inherit（= 夜间取值），因此当前切换到 day 也不会有任何视觉变化。
+   */
+  --nw-palette-ink: inherit;
+  --nw-palette-accent: inherit;
+  --nw-color-text-primary: inherit;
+  --nw-color-text-secondary: inherit;
+  --nw-color-text-tertiary: inherit;
+  --nw-color-text-disabled: inherit;
+  --nw-color-page-bg: inherit;
+  --nw-color-overlay: inherit;
+  --nw-color-overlay-soft: inherit;
+  --nw-color-border-subtle: inherit;
+  --nw-color-border: inherit;
+  --nw-color-border-strong: inherit;
+  --nw-color-accent: inherit;
+  --nw-color-accent-strong: inherit;
+  --nw-color-accent-contrast: inherit;
+  --nw-color-on-accent: inherit;
+  --nw-color-glass-fill: inherit;
+  --nw-color-glass-fill-strong: inherit;
+  --nw-color-glass-highlight: inherit;
+  --nw-color-glass-sheen: inherit;
+  --nw-color-glass-edge: inherit;
+  --nw-color-glass-fallback: inherit;
+  --nw-color-surface: inherit;
+  --nw-color-surface-elevated: inherit;
+  --nw-color-accent-hover: inherit;
+  --nw-color-hover: inherit;
+  --nw-color-focus: inherit;
+  --nw-color-focus-ring: inherit;
+  --nw-color-button-fill-secondary: inherit;
+  --nw-color-button-fill-secondary-top: inherit;
+  --nw-color-button-fill-secondary-bottom: inherit;
+  --nw-color-button-fill-secondary-hover: inherit;
+  --nw-color-button-fill-primary-top: inherit;
+  --nw-color-button-fill-primary-bottom: inherit;
+  --nw-color-button-fill-primary-hover: inherit;
+  --nw-color-button-fill-active: inherit;
+  --nw-color-success: inherit;
+  --nw-color-success-soft: inherit;
+  --nw-color-warning: inherit;
+  --nw-color-warning-soft: inherit;
+  --nw-color-error: inherit;
+  --nw-color-error-soft: inherit;
+  --nw-color-info: inherit;
+  --nw-color-info-soft: inherit;
+  --nw-bg-page: inherit;
+  --nw-bg-vignette: inherit;
+  --nw-orb-body-inner: inherit;
+  --nw-orb-body-mid: inherit;
+  --nw-orb-body-outer: inherit;
+  --nw-orb-rim-inner: inherit;
+  --nw-orb-rim-mid: inherit;
+  --nw-orb-rim-edge: inherit;
+  --nw-orb-core-inner: inherit;
+  --nw-orb-core-mid: inherit;
+  --nw-orb-edge: inherit;
+  --nw-orb-sheen: inherit;
+  --nw-orb-orbit-inner: inherit;
+  --nw-orb-orbit-mid: inherit;
+  --nw-orb-axis-inner: inherit;
+  --nw-orb-axis-mid: inherit;
+  --nw-orb-axis-center: inherit;
+  --nw-orb-node: inherit;
+  --nw-orb-node-core: inherit;
+  --nw-orb-core-light: inherit;
+  --nw-orb-center: inherit;
+  --nw-spectrum-1: inherit;
+  --nw-spectrum-2: inherit;
+  --nw-spectrum-3: inherit;
+  --nw-spectrum-core: inherit;
+  --nw-spectrum-axis: inherit;
+  --nw-wave-core: inherit;
+  --nw-wave-core-mid: inherit;
+  --nw-wave-ring: inherit;
+  --nw-wave-ring-soft: inherit;
+  --nw-wave-bar-1: inherit;
+  --nw-wave-bar-2: inherit;
+  --nw-wave-bar-3: inherit;
+  --nw-wave-bar-axis: inherit;
+  --nw-wave-node: inherit;
+  --nw-panel-fill-top: inherit;
+  --nw-panel-fill-bottom: inherit;
+  --nw-panel-fill-hover-top: inherit;
+  --nw-panel-fill-hover-bottom: inherit;
+  --nw-panel-rim: inherit;
+  --nw-panel-rim-hover: inherit;
+  --nw-panel-sheen: inherit;
+  --nw-panel-inner-glow: inherit;
+  --nw-panel-fallback: inherit;
+  --nw-panel-label: inherit;
+  --nw-panel-label-hover: inherit;
+  --nw-shadow-md: inherit;
+  --nw-shadow-inset-top: inherit;
+  --nw-shadow-panel: inherit;
+  --nw-glow-accent-soft: inherit;
+  --nw-glow-accent: inherit;
+  --nw-glow-subject: inherit;
+}

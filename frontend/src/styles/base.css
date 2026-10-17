@@ -1,0 +1,115 @@
+/**
+ * 全局基础样式（base）
+ * ---------------------------------------------------------------
+ * 仅包含：盒模型、根尺寸、字体与颜色基线、元素默认行为、焦点可见性。
+ * 禁止在此文件写入任何具体页面或组件的视觉样式。
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  background-color: var(--nw-color-page-bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background-color: var(--nw-color-page-bg);
+  background-image: var(--nw-bg-page);
+  background-attachment: fixed;
+  color: var(--nw-color-text-secondary);
+  font-family: var(--nw-font-sans);
+  font-size: var(--nw-font-size-md);
+  font-weight: var(--nw-font-weight-regular);
+  line-height: var(--nw-line-height-normal);
+  letter-spacing: var(--nw-letter-spacing-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+#app {
+  min-height: 100%;
+  isolation: isolate;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+a {
+  color: var(--nw-color-accent-strong);
+  text-decoration: none;
+  transition: var(--nw-transition-colors);
+}
+
+a:hover {
+  color: var(--nw-color-accent-contrast);
+}
+
+/* 键盘焦点可见性：仅对键盘用户显示，鼠标点击不出现光晕 */
+:focus-visible {
+  outline: 2px solid var(--nw-color-focus);
+  outline-offset: 3px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background-color: var(--nw-color-hover);
+  color: var(--nw-color-text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

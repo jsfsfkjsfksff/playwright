@@ -1,0 +1,20 @@
+/**
+ * 全局样式入口
+ * ---------------------------------------------------------------
+ * 加载顺序有严格依赖，请勿调整：
+ *   tokens（非主题令牌）
+ *   → themes/night（当前唯一实际生效的主题）
+ *   → themes/day（日间预留位，当前为空）
+ *   → base（重置与元素基线）
+ *   → utilities（通用工具类）
+ *   → theme（共享视觉原语与关键帧）
+ *
+ * 页面样式写在页面组件内，不在此统一汇集。
+ */
+
+@import './tokens.css';
+@import './themes/night.css';
+@import './themes/day.css';
+@import './base.css';
+@import './utilities.css';
+@import './theme.css';

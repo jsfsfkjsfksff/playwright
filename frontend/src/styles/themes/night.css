@@ -1,0 +1,166 @@
+/**
+ * 夜间主题（Night Theme）—— 当前唯一实际生效的主题
+ * ---------------------------------------------------------------
+ * 设计语言：午夜蓝 / 深海蓝背景，低亮度冷色层次，适量冰蓝与青蓝作为交互强调，
+ * 玻璃材质适度透明，高光与辉光克制，避免过曝与 AI 插画感。
+ *
+ * 说明：
+ *   1. 全部主题令牌定义在 `:root` 上，因此夜间模式即默认主题：`html` 上
+ *      没有主题标识时同样是夜间，不需要任何 JS 介入即可生效。
+ *   2. 本文件只声明**语义化主题令牌**，不含任何页面构图、组件尺寸与定位。
+ *   3. 日间模式接入方式见同目录 day.css：为同名令牌补充取值即可，
+ *      不需要改动页面结构、组件与交互逻辑。
+ *   4. 夜间专属的玻璃材质与光晕（.nw-glass、环境光晕层）在各自样式中单独
+ *      封装并标注，日间模式可按需覆盖，不会无条件作用于浅色背景。
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- 调色板（仅用于主题内派生） ---------- */
+  --nw-palette-ink: #04070f;
+  --nw-palette-accent: #4a86d8;
+
+  /* ---------- 文字 / 图标 ---------- */
+  --nw-color-text-primary: #eef5fd;
+  --nw-color-text-secondary: #aebdd2;
+  --nw-color-text-tertiary: #7c8ba1;
+  --nw-color-text-disabled: #55637a;
+
+  /* ---------- 背景层级 ---------- */
+  --nw-color-page-bg: var(--nw-palette-ink);
+
+  /*
+   * 遮罩层：模态框（BaseModal）、导出抽屉（ExportDrawer）、播放页自动播放闸门共用。
+   * 抽成令牌之前这三处各自写死了 rgb(2 6 14 / 62%~66%)，属于同色重复定义。
+   */
+  --nw-color-overlay: rgb(2 6 14 / 66%);
+  --nw-color-overlay-soft: rgb(2 6 14 / 62%);
+
+  /* ---------- 描边与分隔 ---------- */
+  --nw-color-border-subtle: rgb(126 163 214 / 10%); /* 预留：极弱分隔线 */
+  --nw-color-border: rgb(126 163 214 / 18%);
+  --nw-color-border-strong: rgb(148 189 240 / 32%);
+
+  /* ---------- 主题强调色 ---------- */
+  --nw-color-accent: var(--nw-palette-accent);
+  --nw-color-accent-strong: #7fb2ea;
+  --nw-color-accent-contrast: #d6e8fb;
+  --nw-color-on-accent: #f2f8ff;
+
+  /* ---------- 玻璃材质与容器表面 ---------- */
+  --nw-color-glass-fill: rgb(18 34 62 / 46%);
+  --nw-color-glass-fill-strong: rgb(20 38 70 / 68%); /* 预留：更高不透明度的浮层 */
+  --nw-color-glass-highlight: rgb(190 224 255 / 12%);
+  --nw-color-glass-sheen: rgb(190 224 255 / 4%);
+  --nw-color-glass-edge: rgb(140 187 240 / 26%);
+  --nw-color-glass-fallback: rgb(14 26 48 / 88%); /* 不支持 backdrop-filter 时的兜底 */
+
+  /* 语义化容器表面：面板与组件统一引用这两个，不直接引用 glass-fill */
+  --nw-color-surface: var(--nw-color-glass-fill);
+  --nw-color-surface-elevated: var(--nw-color-glass-fill-strong);
+
+  /* ---------- 交互状态 ---------- */
+  --nw-color-accent-hover: rgb(122 176 246 / 20%);
+  --nw-color-hover: rgb(122 176 246 / 14%);
+  --nw-color-focus: #8ec5ff;
+  --nw-color-focus-ring: rgb(142 197 255 / 55%);
+
+  /* ---------- 按钮材质 ---------- */
+  --nw-color-button-fill-secondary: rgb(14 26 48 / 52%);
+  --nw-color-button-fill-secondary-top: rgb(24 44 80 / 40%);
+  --nw-color-button-fill-secondary-bottom: rgb(8 16 32 / 50%);
+  --nw-color-button-fill-secondary-hover: rgb(20 38 70 / 60%);
+  --nw-color-button-fill-primary-top: rgb(28 52 92 / 42%);
+  --nw-color-button-fill-primary-bottom: rgb(9 18 36 / 52%);
+  --nw-color-button-fill-primary-hover: rgb(26 50 90 / 68%);
+  --nw-color-button-fill-active: rgb(30 58 102 / 72%);
+
+  /* ---------- 状态色（预留：音量提示 / 加载失败 / 订阅结果） ---------- */
+  --nw-color-success: #4fbf9a;
+  --nw-color-success-soft: rgb(79 191 154 / 14%);
+  --nw-color-warning: #d8b06a;
+  --nw-color-warning-soft: rgb(216 176 106 / 14%);
+  --nw-color-error: #e08585;
+  --nw-color-error-soft: rgb(224 133 133 / 14%);
+  --nw-color-info: var(--nw-color-accent);
+  --nw-color-info-soft: rgb(74 134 216 / 14%);
+
+  /* ---------- 背景效果：页面底色与暗角 ----------
+   * 历史：这里曾有 --nw-bg-fog / --nw-bg-moon(-glow) / --nw-bg-halo 与整组
+   * 「水与远景」令牌（水面、星点、山脊、对岸灯火），它们只服务于自绘环境层
+   * components/ambient/*。该环境层已被统一背景图（base/PageBackdrop.vue）取代并删除，
+   * 这些没有消费方的令牌一并移除，避免留下没人引用的「僵尸令牌」。 */
+  --nw-bg-page:
+    radial-gradient(122% 76% at 50% 30%, rgb(40 84 152 / 30%) 0%, rgb(16 36 72 / 15%) 44%, transparent 74%),
+    radial-gradient(150% 108% at 50% 116%, rgb(12 28 54 / 70%) 0%, transparent 62%),
+    linear-gradient(180deg, #04070f 0%, #071023 42%, #0b1a33 68%, #08111f 100%);
+  --nw-bg-vignette: radial-gradient(
+    132% 122% at 50% 40%,
+    transparent 46%,
+    rgb(2 5 12 / 42%) 82%,
+    rgb(1 3 8 / 64%) 100%
+  );
+
+  /* ---------- 声音主体（球体 / 轨道 / 频谱）----------
+   * 属于图形着色而非 UI 语义色，但同样随主题变化，
+   * 因此集中在此管理，避免在 SVG 内写死主题相关的色值。 */
+  --nw-orb-body-inner: rgb(156 198 242 / 14%);
+  --nw-orb-body-mid: rgb(76 134 204 / 9%);
+  --nw-orb-body-outer: rgb(13 31 61 / 30%);
+  --nw-orb-rim-inner: rgb(127 178 234 / 0%);
+  --nw-orb-rim-mid: rgb(159 201 244 / 34%);
+  --nw-orb-rim-edge: rgb(207 230 255 / 50%);
+  --nw-orb-core-inner: rgb(188 220 255 / 34%);
+  --nw-orb-core-mid: rgb(90 154 222 / 10%);
+  --nw-orb-edge: rgb(143 188 234 / 26%);
+  --nw-orb-sheen: rgb(188 220 255 / 16%);
+  --nw-orb-orbit-inner: rgb(110 168 228 / 6%);
+  --nw-orb-orbit-mid: rgb(154 200 242 / 42%);
+  --nw-orb-axis-inner: rgb(168 208 246 / 0%);
+  --nw-orb-axis-mid: rgb(207 230 255 / 34%);
+  --nw-orb-axis-center: rgb(240 248 255 / 62%);
+  --nw-orb-node: rgb(143 196 242 / 22%);
+  --nw-orb-node-core: rgb(214 235 255 / 72%);
+  --nw-orb-core-light: rgb(220 239 255 / 20%);
+  --nw-orb-center: rgb(242 249 255 / 74%);
+  --nw-spectrum-1: rgb(47 111 189 / 16%);
+  --nw-spectrum-2: rgb(90 162 232 / 50%);
+  --nw-spectrum-3: rgb(159 208 247 / 88%);
+  --nw-spectrum-core: rgb(228 242 255 / 100%);
+  --nw-spectrum-axis: rgb(207 232 255 / 14%);
+
+  /* ---------- 环形音波（AudioWave，功能选择页中央主体） ----------
+   * 与首页频谱（--nw-spectrum-*）区分：这里是圆周环绕的声纹柱体与同心波纹，
+   * 不透明度量级更低，保证主体清晰但不过曝。 */
+  --nw-wave-core: rgb(16 38 70 / 16%);
+  --nw-wave-core-mid: rgb(24 56 100 / 9%);
+  --nw-wave-ring: rgb(154 200 242 / 20%);
+  --nw-wave-ring-soft: rgb(154 200 242 / 9%);
+  --nw-wave-bar-1: rgb(90 162 232 / 80%);
+  --nw-wave-bar-2: rgb(159 208 247 / 90%);
+  --nw-wave-bar-3: rgb(228 242 255 / 96%);
+  --nw-wave-bar-axis: rgb(214 236 255 / 88%);
+  --nw-wave-node: rgb(220 239 255 / 72%);
+
+  /* ---------- 功能入口面板（FeaturePanel：资源 / 创作） ---------- */
+  --nw-panel-fill-top: rgb(30 56 100 / 72%);
+  --nw-panel-fill-bottom: rgb(11 24 46 / 86%);
+  --nw-panel-fill-hover-top: rgb(42 74 126 / 84%);
+  --nw-panel-fill-hover-bottom: rgb(15 32 60 / 92%);
+  --nw-panel-rim: rgb(148 194 242 / 34%);
+  --nw-panel-rim-hover: rgb(182 218 252 / 62%);
+  --nw-panel-sheen: rgb(190 224 255 / 10%);
+  --nw-panel-inner-glow: rgb(120 178 240 / 20%);
+  --nw-panel-fallback: rgb(11 22 44 / 94%);
+  --nw-panel-label: var(--nw-color-text-primary);
+  --nw-panel-label-hover: var(--nw-color-accent-contrast);
+
+  /* ---------- 阴影与光效 ---------- */
+  --nw-shadow-md: 0 10px 30px rgb(2 6 14 / 52%);
+  --nw-shadow-inset-top: inset 0 1px 0 rgb(200 230 255 / 8%);
+  --nw-shadow-panel: var(--nw-shadow-md), var(--nw-shadow-inset-top);
+  --nw-glow-accent-soft: 0 0 26px rgb(74 134 216 / 22%);
+  --nw-glow-accent: 0 0 34px rgb(148 189 240 / 24%); /* 标题等需要柔光的场景，面积克制 */
+  --nw-glow-subject: drop-shadow(0 0 42px rgb(74 134 216 / 18%));
+}

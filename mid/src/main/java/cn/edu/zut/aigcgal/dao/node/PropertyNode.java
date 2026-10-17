@@ -1,12 +1,11 @@
 package cn.edu.zut.aigcgal.dao.node;
 
 import lombok.Data;
-import org.springframework.data.neo4j.core.schema.CompositeProperty;
-import org.springframework.data.neo4j.core.schema.GeneratedValue;
-import org.springframework.data.neo4j.core.schema.Id;
-import org.springframework.data.neo4j.core.schema.Node;
+import org.springframework.data.neo4j.core.schema.*;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,4 +33,15 @@ public class PropertyNode {
     // 属性不写死：任意键值对，以复合属性形式落库（attributes.isHostile = false）
     @CompositeProperty
     private Map<String, Object> attributes = new HashMap<>();
+
+    // 无需新建 PropertyRelation 类，直接在 PropertyNode 中声明：
+    @Relationship(direction = Relationship.Direction.OUTGOING)
+    private Map<String, List<PropertyNode>> dynamicRelations = new HashMap<>();
+
+    // 便捷连线方法：传入的 relationType ("HOLDS" / "ENEMY_OF") 会直接成为 Neo4j 的边类型！
+    public void addDynamicRelation(String relationType, PropertyNode target) {
+        this.dynamicRelations
+                .computeIfAbsent(relationType.toUpperCase(), k -> new ArrayList<>())
+                .add(target);
+    }
 }

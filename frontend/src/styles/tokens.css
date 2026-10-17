@@ -1,0 +1,128 @@
+/**
+ * 基础设计令牌（Design Tokens）
+ * ---------------------------------------------------------------
+ * 全站唯一视觉真源，只放**与主题无关**的令牌：
+ * 调色板原色、字体、间距、圆角、描边宽度、模糊、布局、动效、层级。
+ *
+ * 主题相关令牌（颜色 / 背景效果 / 阴影光效 / 水与远景 / 声音主体）单独管理：
+ *   - 当前实际生效：src/styles/themes/night.css（夜间模式，默认主题）
+ *   - 后续接入预留：src/styles/themes/day.css（日间模式，仅预留接口）
+ *
+ * 约定：
+ *   1. 令牌统一以 `--nw-` 作命名空间，避免与第三方样式冲突。
+ *   2. 组件样式不得硬编码颜色 / 圆角 / 阴影 / 间距，必须引用令牌。
+ *   3. 新增页面一律先完成夜间模式；日间模式通过补充主题取值接入，
+ *      不得另写一套页面结构或复制组件样式。
+ *   4. 标注「预留」的令牌当前页面未消费，是为后续页面准备的统一取值。
+ */
+:root {
+  /* =============================================================
+   * A. 非主题令牌
+   * ============================================================= */
+
+  /* ---------- 字体系统 ---------- */
+  --nw-font-sans:
+    'Inter', 'HarmonyOS Sans SC', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI',
+    'Microsoft YaHei', 'Source Han Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --nw-font-size-sm: 0.875rem; /* 14px */
+  --nw-font-size-md: 1rem; /* 16px */
+  --nw-font-size-lg: 1.125rem; /* 18px（预留：正文放大 / 列表标题） */
+  --nw-font-size-display: clamp(1.875rem, 1.35rem + 1.5vw, 2.75rem); /* 30px → 44px */
+
+  --nw-font-weight-regular: 400;
+  --nw-font-weight-medium: 500;
+  --nw-font-weight-semibold: 600; /* 预留：标题与强调层级 */
+
+  --nw-line-height-tight: 1.2;
+  --nw-line-height-snug: 1.4; /* 预留：多行标题 */
+  --nw-line-height-normal: 1.6;
+
+  --nw-letter-spacing-normal: 0;
+  --nw-letter-spacing-wide: 0.04em;
+  --nw-letter-spacing-widest: 0.14em; /* 中文按钮字距 */
+  --nw-letter-spacing-display: 0.32em; /* “欢迎”双字标题 */
+
+  /* ---------- 间距系统（4px 基准） ---------- */
+  --nw-space-2xs: 0.5rem; /* 8（预留） */
+  --nw-space-xs: 0.75rem; /* 12 */
+  --nw-space-sm: 1rem; /* 16 */
+  --nw-space-md: 1.5rem; /* 24（预留） */
+  --nw-space-lg: 2rem; /* 32（预留） */
+  --nw-space-xl: 2.5rem; /* 40（预留） */
+
+  /* ---------- 圆角系统 ---------- */
+  --nw-radius-xs: 4px; /* 预留：标签 / 徽标 */
+  --nw-radius-sm: 8px;
+  --nw-radius-md: 12px; /* 预留：输入框 / 小面板 */
+  --nw-radius-lg: 16px;
+  --nw-radius-xl: 24px; /* 预留：大浮层 / 弹窗 */
+  --nw-radius-pill: 999px; /* 图标按钮 / 胶囊标签 */
+  --nw-radius-circle: 50%;
+
+  /* ---------- 描边宽度（与主题无关） ---------- */
+  --nw-border-width: 1px;
+  --nw-border-width-strong: 2px;
+
+  /* ---------- 模糊（与主题无关） ---------- */
+  --nw-blur-sm: 8px; /* 预留：轻量模糊 */
+  --nw-blur-md: 18px;
+  --nw-blur-lg: 36px;
+  --nw-blur-xl: 64px;
+
+  /* ---------- 布局规范 ---------- */
+  --nw-layout-content-max: 1240px; /* 预留：常规内容栏 */
+  --nw-layout-page-gutter: clamp(1rem, 4vw, 2.5rem);
+  --nw-layout-header-inset: clamp(1rem, 3.4vh, 3.25rem);
+  --nw-layout-stage-max: 1680px;
+
+  /* 响应式断点（供文档与 JS 共享；媒体查询中必须写具体数值） */
+  --nw-breakpoint-md: 768px;
+  --nw-breakpoint-lg: 1024px;
+
+  /* ---------- 动效规范 ---------- */
+  --nw-ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --nw-ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+
+  --nw-duration-instant: 90ms; /* 预留：即时反馈（按压回弹） */
+  --nw-duration-fast: 160ms;
+  --nw-duration-base: 260ms;
+  --nw-duration-slow: 420ms; /* 预留：大范围颜色过渡（如后续主题切换） */
+
+  --nw-transition-colors:
+    color var(--nw-duration-fast) var(--nw-ease-out),
+    background-color var(--nw-duration-fast) var(--nw-ease-out),
+    border-color var(--nw-duration-fast) var(--nw-ease-out);
+  --nw-transition-interactive:
+    color var(--nw-duration-base) var(--nw-ease-out),
+    background-color var(--nw-duration-base) var(--nw-ease-out),
+    border-color var(--nw-duration-base) var(--nw-ease-out),
+    box-shadow var(--nw-duration-base) var(--nw-ease-out),
+    transform var(--nw-duration-base) var(--nw-ease-out);
+
+  /* 环境动效周期：低频、缓慢（消费方：AudioOrb / AudioWave / AudioSpectrumBars） */
+  --nw-duration-breathe: 18s;
+
+  /* ---------- 层级规范 ---------- */
+  --nw-z-behind: -1;
+  --nw-z-base: 0;
+  --nw-z-background: 1;
+  --nw-z-far: 2;
+  --nw-z-glow: 4;
+  --nw-z-content: 10;
+  --nw-z-overlay: 40;
+  --nw-z-modal: 60; /* 预留：弹窗 */
+  --nw-z-toast: 80; /* 预留：全局提示 */
+}
+
+/* 用户偏好减少动效：全局压低动效时长，组件内仍需显式关闭 keyframes */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --nw-duration-instant: 1ms;
+    --nw-duration-fast: 1ms;
+    --nw-duration-base: 1ms;
+    --nw-duration-slow: 1ms;
+    --nw-duration-breathe: 1ms;
+    --nw-duration-drift: 1ms;
+  }
+}

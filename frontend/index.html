@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="night">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 当前阶段只提供夜间模式；日间模式接入后由 src/composables/useTheme.ts 切换 -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#04070f" />
+    <meta name="description" content="夜间电台播客平台" />
+    <!-- 内联 SVG 图标：避免额外请求，同时保持浏览器控制台无 404 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a1122'/%3E%3Cg fill='%237fb2ea'%3E%3Crect x='7' y='13' width='2' height='6' rx='1'/%3E%3Crect x='12' y='8' width='2' height='16' rx='1'/%3E%3Crect x='17' y='5' width='2' height='22' rx='1'/%3E%3Crect x='22' y='11' width='2' height='10' rx='1'/%3E%3C/g%3E%3C/svg%3E"
+    />
+    <!-- 初始标题用站名本身；进入路由后由 src/router/index.ts 的 afterEach 按 meta.title 覆盖 -->
+    <title>夜间电台</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
