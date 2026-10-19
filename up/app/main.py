@@ -10,7 +10,7 @@ from app.api.deps import (
     get_llm_gateway,
     shutdown_services,
 )
-from app.api.v1 import generate
+from app.api.v1 import audio, generate
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import AppException
@@ -115,6 +115,8 @@ app.include_router(api_router, prefix="/api/v1")
 
 # Java 端（PEngineController）固定按 /api/ai/generate-worldline 调用，保留该兼容路径
 app.include_router(generate.router, prefix="/api/ai", tags=["generate"])
+# 契约：Java 的 export 包固定按 /api/audio/export 调用
+app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
 
 
 # ---------- 静态资源 ----------

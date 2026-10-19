@@ -3,6 +3,7 @@ from functools import lru_cache
 from app.core.logging import get_logger
 from app.infra.llm.gateway import LLMGateway, build_gateway
 from app.services.agent_service import AgentService
+from app.services.audio_export_service import AudioExportService
 from app.services.tts_service import TTSService
 from app.services.worldline_service import WorldlineService
 
@@ -24,9 +25,15 @@ def get_tts_service() -> TTSService:
     return TTSService()
 
 
+def get_audio_export_service() -> AudioExportService:
+    """音频导出服务无状态、无连接资源，不需要缓存也不需要停机释放。"""
+    return AudioExportService()
+
+
 @lru_cache(maxsize=1)
 def get_worldline_service() -> WorldlineService:
-    return WorldlineService(llm=get_llm_gateway())
+    """世界线生成后会逐条合成语音，复用同一个 TTS 服务（连带它的连接池）。"""
+    return WorldlineService(llm=get_llm_gateway(), tts=get_tts_service())
 
 
 async def shutdown_services() -> None:

@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     # ---------- 静态资源 ----------
     static_dir: str = "static"
     audio_subdir: str = "audio"
+    export_subdir: str = "exports"
 
     # ---------- 配置文件路径 ----------
     providers_file: str = "configs/providers.yaml"
     model_routing_file: str = "configs/model_routing.yaml"
+    voices_file: str = "configs/voices.yaml"
 
     # ---------- LLM 通用参数 ----------
     llm_timeout: float = 60.0
@@ -37,6 +39,11 @@ class Settings(BaseSettings):
     tts_default_voice: str = "zh-CN-xiaoxiao"
     tts_default_rate: float = 1.0
     tts_timeout: float = 60.0
+
+    # ---------- TTS provider（DashScope 原生接口） ----------
+    dashscope_tts_api_key: str | None = None
+    dashscope_tts_base_url: str = "https://dashscope.aliyuncs.com"
+    dashscope_tts_model: str = "qwen-tts"
 
     # ---------- Agent ----------
     agent_default_model_alias: str = "podcaster"
@@ -49,6 +56,14 @@ class Settings(BaseSettings):
     @property
     def audio_path(self) -> Path:
         return Path(self.static_dir) / self.audio_subdir
+
+    @property
+    def export_path(self) -> Path:
+        return Path(self.static_dir) / self.export_subdir
+
+    @property
+    def voices_path(self) -> Path:
+        return Path(self.voices_file)
 
     @property
     def providers_path(self) -> Path:

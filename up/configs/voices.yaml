@@ -1,0 +1,18 @@
+# 说话人 -> 音色参数。
+#
+# 文档里的「语音档案」在 Java 侧是全篇唯一一条；TTS 按世界线节点上的
+# speaker 名在这里匹配音色，匹配不到就用 default。
+#
+# pitch 可以不写，不写就不给 TTS 下发该参数。
+
+default:
+  voice: zh-CN-xiaoxiao
+  rate: 1.0
+
+speakers:
+  旁白:
+    voice: zh-CN-yunxi
+    rate: 0.95
+  少女:
+    voice: zh-CN-xiaoyi
+    rate: 1.05

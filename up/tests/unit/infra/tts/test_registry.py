@@ -43,10 +43,11 @@ def test_re_register_overwrites():
     assert len(registry.all()) == 1
 
 
-@pytest.mark.xfail(
-    reason="Settings 缺 dashscope_tts_api_key/base_url/model 字段，默认注册表暂时构造不了",
-    strict=False,
-)
 def test_build_default_registry_registers_dashscope():
+    """默认注册表要能真正构造出 DashScope provider（此前 Settings 缺字段建不起来）。"""
     registry = build_default_registry()
+
     assert "dashscope" in registry.list_providers()
+    provider = registry.get("dashscope")
+    assert provider.name == "dashscope"
+    assert provider._output_dir.is_dir()

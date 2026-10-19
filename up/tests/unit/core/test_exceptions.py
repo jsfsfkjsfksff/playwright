@@ -6,6 +6,9 @@ from app.core.constants import ErrorCode
 from app.core.exceptions import (
     AgentPersonaBrokenException,
     AppException,
+    AudioFormatUnsupportedException,
+    AudioMergeFailedException,
+    AudioSegmentMissingException,
     ConfigException,
     InvalidRequestException,
     LLMOutputInvalidException,
@@ -33,6 +36,9 @@ SUBCLASSES = [
     (TTSProviderNotFoundException, ErrorCode.TTS_PROVIDER_NOT_FOUND, 500),
     (TTSFailedException, ErrorCode.TTS_FAILED, 500),
     (TTSTimeoutException, ErrorCode.TTS_TIMEOUT, 504),
+    (AudioSegmentMissingException, ErrorCode.AUDIO_SEGMENT_MISSING, 404),
+    (AudioFormatUnsupportedException, ErrorCode.AUDIO_FORMAT_UNSUPPORTED, 415),
+    (AudioMergeFailedException, ErrorCode.AUDIO_MERGE_FAILED, 500),
 ]
 
 
