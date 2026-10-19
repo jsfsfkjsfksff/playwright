@@ -96,3 +96,22 @@ class TTSTimeoutException(AppException):
     code = ErrorCode.TTS_TIMEOUT
     http_status = 504
     message = "TTS 服务超时"
+
+
+# ---------- 音频导出 ----------
+class AudioSegmentMissingException(AppException):
+    code = ErrorCode.AUDIO_SEGMENT_MISSING
+    http_status = 404
+    message = "待拼接的音频片段不存在"
+
+
+class AudioFormatUnsupportedException(AppException):
+    code = ErrorCode.AUDIO_FORMAT_UNSUPPORTED
+    http_status = 415
+    message = "音频格式不支持"
+
+
+class AudioMergeFailedException(AppException):
+    code = ErrorCode.AUDIO_MERGE_FAILED
+    http_status = 500
+    message = "音频拼接失败"

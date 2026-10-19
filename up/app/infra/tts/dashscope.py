@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from tenacity import (
@@ -17,6 +18,11 @@ from app.core.logging import get_logger
 from app.domain.tts.models import AudioResult, TTSInput
 
 logger = get_logger(__name__)
+
+# 契约：Python 只回相对路径（如 static/audio/x.mp3），对外 URL 由 Java 拼。
+_STATIC_URL_PREFIX = "static"
+# 认得出来的音频容器，用于把落盘文件的后缀写对
+_KNOWN_FORMATS = {"mp3", "wav", "pcm", "ogg", "m4a", "aac", "flac"}
 
 
 class DashScopeTTSProvider:
@@ -79,6 +85,27 @@ class DashScopeTTSProvider:
             raise ConfigException("DashScope TTS model 未配置")
         return model
 
+    def _media_url(self, filename: str) -> str:
+        """返回相对媒体路径（契约要求，绝对 URL 交给 Java 的 MediaUrlResolver）。"""
+        return f"{_STATIC_URL_PREFIX}/{settings.audio_subdir}/{filename}"
+
+    @staticmethod
+    def _detect_format(audio_url: str, content: bytes, fallback: str) -> str:
+        """确定音频容器：先看字节魔数，再看下载地址后缀，最后用请求里的 format。
+
+        请求里的 format 只是"想要什么格式"，服务端不一定照做；
+        后缀写错会让播放器和拼接逻辑都判断失误。
+        """
+        if content[:3] == b"ID3" or content[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            return "mp3"
+        if content[:4] == b"RIFF" and content[8:12] == b"WAVE":
+            return "wav"
+
+        suffix = Path(urlparse(audio_url).path).suffix.lstrip(".").lower()
+        if suffix in _KNOWN_FORMATS:
+            return suffix
+        return fallback
+
     async def synthesize(self, req: TTSInput) -> AudioResult:
         return await self._synthesize_with_retry(req)
 
@@ -109,6 +136,9 @@ class DashScopeTTSProvider:
             "input": {"text": req.text},
             "parameters": {"voice": req.voice, "rate": req.rate},
         }
+        if req.pitch is not None:
+            # 音调是可选参数：没设就不下发，避免端点因为多出来的字段拒收
+            payload["parameters"]["pitch"] = req.pitch
 
         client = await self._get_client()
         try:
@@ -136,15 +166,16 @@ class DashScopeTTSProvider:
             )
 
         audio_bytes = await self._download_audio(audio_url)
-        filename = f"{uuid.uuid4().hex}.{req.format}"
+        audio_format = self._detect_format(audio_url, audio_bytes, req.format)
+        filename = f"{uuid.uuid4().hex}.{audio_format}"
         local_path = self._output_dir / filename
         local_path.write_bytes(audio_bytes)
 
         return AudioResult(
-            audioUrl=f"/static/{settings.audio_subdir}/{filename}",
+            audioUrl=self._media_url(filename),
             durationMs=duration_ms or self._estimate_duration_ms(req.text),
             localPath=str(local_path),
-            format=req.format,
+            format=audio_format,
         )
 
     def _extract_audio_url(self, data: dict) -> str | None:

@@ -66,12 +66,12 @@ async def test_synthesize_success(provider, patch_httpx, tmp_path):
 
     assert result.durationMs == 1500
     assert result.format == "mp3"
-    assert result.audioUrl.startswith("/static/audio/")
+    assert result.audioUrl.startswith("static/audio/")
     assert result.audioUrl.endswith(".mp3")
     saved = Path(result.localPath)
     assert saved.parent == tmp_path
     assert saved.read_bytes() == b"ID3-bytes"
-    assert Path(result.audioUrl).name == saved.name
+    assert result.audioUrl.endswith(f"/{saved.name}")
 
 
 @pytest.mark.anyio
@@ -82,7 +82,7 @@ async def test_audio_url_field_variants(provider, patch_httpx, key):
     get.return_value = _response(content=b"audio")
 
     result = await provider.synthesize(TTSInput(text="各位听众"))
-    assert result.audioUrl.startswith("/static/audio/")
+    assert result.audioUrl.startswith("static/audio/")
 
 
 @pytest.mark.anyio
@@ -228,3 +228,65 @@ def test_output_dir_is_created_on_init(tmp_path):
         output_dir=target,
     )
     assert target.is_dir()
+
+
+@pytest.mark.anyio
+async def test_audio_url_is_relative_per_contract(provider, patch_httpx):
+    """契约 §3.2：Python 只回相对路径，绝对 URL 由 Java 的 MediaUrlResolver 拼。"""
+    _, post, get = patch_httpx
+    post.return_value = _response(payload=_audio_payload())
+    get.return_value = _response(content=b"ID3-bytes")
+
+    result = await provider.synthesize(TTSInput(text="各位听众"))
+
+    assert result.audioUrl.startswith("static/audio/")
+    assert not result.audioUrl.startswith("/")
+    assert "http://" not in result.audioUrl
+
+
+@pytest.mark.anyio
+async def test_wav_bytes_get_wav_suffix(provider, patch_httpx):
+    """服务端给的是 wav 时后缀要跟着变，不能按请求里的 mp3 写死。"""
+    _, post, get = patch_httpx
+    post.return_value = _response(payload=_audio_payload())
+    get.return_value = _response(content=b"RIFF" + b"\x00" * 4 + b"WAVEfmt ")
+
+    result = await provider.synthesize(TTSInput(text="各位听众", format="mp3"))
+
+    assert result.format == "wav"
+    assert result.audioUrl.endswith(".wav")
+    assert Path(result.localPath).suffix == ".wav"
+
+
+@pytest.mark.anyio
+async def test_format_falls_back_to_url_suffix(provider, patch_httpx):
+    """字节认不出来时，用下载地址的后缀兜底。"""
+    _, post, get = patch_httpx
+    post.return_value = _response(payload={"output": {"audio_url": "https://cdn.invalid/b.wav"}})
+    get.return_value = _response(content=b"unknown-bytes")
+
+    result = await provider.synthesize(TTSInput(text="各位听众", format="mp3"))
+
+    assert result.format == "wav"
+
+
+@pytest.mark.anyio
+async def test_pitch_is_forwarded_when_set(provider, patch_httpx):
+    _, post, get = patch_httpx
+    post.return_value = _response(payload=_audio_payload())
+    get.return_value = _response(content=b"ID3-bytes")
+
+    await provider.synthesize(TTSInput(text="各位听众", pitch=-2.0))
+
+    assert post.call_args.kwargs["json"]["parameters"]["pitch"] == -2.0
+
+
+@pytest.mark.anyio
+async def test_pitch_is_absent_when_not_set(provider, patch_httpx):
+    _, post, get = patch_httpx
+    post.return_value = _response(payload=_audio_payload())
+    get.return_value = _response(content=b"ID3-bytes")
+
+    await provider.synthesize(TTSInput(text="各位听众"))
+
+    assert "pitch" not in post.call_args.kwargs["json"]["parameters"]

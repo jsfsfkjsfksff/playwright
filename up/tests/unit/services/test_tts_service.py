@@ -7,9 +7,11 @@ import pytest
 from app.core.exceptions import TTSProviderNotFoundException
 from app.domain.tts.models import AudioResult, TTSInput
 from app.infra.tts.registry import TTSRegistry
+from app.infra.tts.voice_map import VoiceMap, VoiceSpec
 from app.services.tts_service import TTSService
 
 INPUT = TTSInput(text="各位听众")
+DEFAULT_VOICES = VoiceMap(default=VoiceSpec(voice="zh-CN-xiaoxiao", rate=1.0))
 
 
 def _provider(name: str = "dashscope"):
@@ -24,11 +26,19 @@ def _provider(name: str = "dashscope"):
     return provider
 
 
-def _service(*providers, provider_name: str = "dashscope") -> TTSService:
+def _service(
+    *providers,
+    provider_name: str = "dashscope",
+    voice_map: VoiceMap | None = None,
+) -> TTSService:
     registry = TTSRegistry()
     for provider in providers:
         registry.register(provider)
-    return TTSService(registry=registry, provider_name=provider_name)
+    return TTSService(
+        registry=registry,
+        provider_name=provider_name,
+        voice_map=voice_map or DEFAULT_VOICES,
+    )
 
 
 @pytest.mark.anyio
@@ -109,3 +119,52 @@ async def test_aclose_continues_after_provider_failure():
 @pytest.mark.anyio
 async def test_aclose_with_empty_registry():
     await _service().aclose()
+
+
+@pytest.mark.anyio
+async def test_synthesize_many_keeps_order_and_isolates_failures():
+    """一段台词合成失败，其它片段照常返回（顺序不能乱）。"""
+    provider = _provider("dashscope")
+    provider.synthesize = AsyncMock(
+        side_effect=[
+            AudioResult(audioUrl="static/audio/a.mp3", durationMs=1, localPath="a"),
+            RuntimeError("boom"),
+            AudioResult(audioUrl="static/audio/c.mp3", durationMs=1, localPath="c"),
+        ]
+    )
+    inputs = [TTSInput(text=text) for text in ("a", "b", "c")]
+
+    results = await _service(provider).synthesize_many(inputs)
+
+    assert [None if r is None else r.audioUrl for r in results] == [
+        "static/audio/a.mp3",
+        None,
+        "static/audio/c.mp3",
+    ]
+    assert provider.synthesize.await_count == 3
+
+
+def test_build_input_uses_voice_of_speaker():
+    voice_map = VoiceMap(
+        default=VoiceSpec(voice="zh-CN-xiaoxiao", rate=1.0),
+        speakers={"少女": VoiceSpec(voice="zh-CN-xiaoyi", rate=1.1, pitch=-2.0)},
+    )
+    service = _service(voice_map=voice_map)
+
+    assert service.build_input("台词", "少女") == TTSInput(
+        text="台词", voice="zh-CN-xiaoyi", rate=1.1, pitch=-2.0
+    )
+    assert service.build_input("台词", "路人甲") == TTSInput(text="台词")
+    assert service.build_input("台词") == TTSInput(text="台词")
+    assert service.build_input("台词", "  少女  ").voice == "zh-CN-xiaoyi"
+
+
+def test_build_input_lets_overrides_win():
+    service = _service(
+        voice_map=VoiceMap(default=VoiceSpec(voice="zh-CN-xiaoxiao", rate=1.0))
+    )
+
+    built = service.build_input("台词", "少女", voice="CustomVoice", rate=1.5)
+
+    assert built.voice == "CustomVoice"
+    assert built.rate == 1.5

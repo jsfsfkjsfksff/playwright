@@ -172,3 +172,51 @@ def write_routing(tmp_path):
         return path
 
     return _write
+
+
+@pytest.fixture
+def mp3_kit():
+    """构造合法 MP3 字节的工具（MPEG1 Layer III / 128kbps / 44.1kHz）。
+
+    frames(n) 造 n 个音频帧；write_file 落盘；id3v2/id3v1 造文件级标签。
+    """
+    frame_size = 417  # 1152 / 8 * 128000 / 44100（无 padding）
+    frame_ms = 1152 * 1000 / 44100  # 单帧时长 ≈ 26.12ms
+
+    def frames(count: int = 1) -> bytes:
+        frame = b"\xff\xfb\x90\x00" + b"\x00" * (frame_size - 4)
+        return frame * count
+
+    def id3v2(payload: bytes = b"TAGp") -> bytes:
+        size = len(payload)
+        header = b"ID3\x03\x00\x00" + bytes(
+            [
+                (size >> 21) & 0x7F,
+                (size >> 14) & 0x7F,
+                (size >> 7) & 0x7F,
+                size & 0x7F,
+            ]
+        )
+        return header + payload
+
+    def id3v1() -> bytes:
+        return b"TAG" + b"\x00" * 125
+
+    def write_file(
+        path: Path,
+        count: int = 1,
+        prefix: bytes = b"",
+        suffix: bytes = b"",
+    ) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(prefix + frames(count) + suffix)
+        return path
+
+    return SimpleNamespace(
+        frames=frames,
+        id3v2=id3v2,
+        id3v1=id3v1,
+        write_file=write_file,
+        frame_size=frame_size,
+        frame_ms=frame_ms,
+    )
