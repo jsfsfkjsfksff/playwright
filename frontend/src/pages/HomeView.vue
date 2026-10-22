@@ -6,8 +6,11 @@
  *   1. 背景层   .nw-home__backdrop   —— 整张静态背景图铺满视口
  *                叠一层内联噪声，压掉大面积渐变可能出现的色带
  *   2. 动态层   HomeMotionLayer      —— 笔墨 / 光环 / 呼吸光 / 水波纹 / 光点
- *   3. 内容层   HomeBrand + HomeMenu + ThemeToggle（左）
+ *   3. 内容层   HomeBrand + HomeMenu（左）
  *                HomeNewsPanel（右，绝对定位）
+ *
+ * 主题说明：全站只有夜间模式（主题切换入口已按需求移除），
+ * 因此本页没有、也不应该再有任何主题相关控件。
  *
  * 背景说明（本次变更）：
  *   页面背景改为一张静态图（src/assets/home-backdrop.jpg）：球体、月亮、流星、
@@ -24,16 +27,28 @@
  *
  * 交互：菜单与订阅入口的真实跳转由 HomeMenu / HomeNewsPanel 内的
  * <RouterLink> 承担；尚未开发的入口向上抛 feedback，由本页统一播报提示。
+ *
+ * 【设置入口 = 音色选择】
+ *   音色选择按需求从播放页移到主界面的「设置」入口下：点菜单的「设置」不跳页，
+ *   由 HomeMenu 抛 `settings` 事件，本页就地弹出 TimbreSelectModal。
+ *   为什么不新开一个设置页：设置目前只有音色这一项，开页面反而多一层交互链路。
+ *   选中的音色会提交后端（POST /api/v1/voices）—— 后端按它调用 TTS 合成，
+ *   因此它不是纯本地偏好；提交失败只播报一句，不挡操作。
  */
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 
 import homeBackdrop from '@/assets/home-backdrop.jpg'
 import ToastPill from '@/components/base/ToastPill.vue'
-import ThemeToggle from '@/components/base/ThemeToggle.vue'
 import HomeBrand from '@/components/home/HomeBrand.vue'
 import HomeMenu from '@/components/home/HomeMenu.vue'
 import HomeMotionLayer from '@/components/home/HomeMotionLayer.vue'
 import HomeNewsPanel from '@/components/home/HomeNewsPanel.vue'
+import TimbreSelectModal from '@/components/feature/TimbreSelectModal.vue'
+import { usePlayerStore } from '@/stores/player'
+import { useStudioStore } from '@/stores/studio'
+import { DEFAULT_TIMBRE_ID, TIMBRE_OPTIONS, buildTimbreVoiceConfig, resolveTimbreOption } from '@/types/studio'
+import type { TimbreId, TimbreOption } from '@/types/studio'
+import { NARRATOR_SPEAKER } from '@/utils/studioVocabulary'
 
 /** 提示条停留时长（ms），与参考稿一致 */
 const TOAST_DURATION = 1900
@@ -56,6 +71,65 @@ function notify(message: string): void {
   toastTimer = window.setTimeout(() => {
     toastVisible.value = false
   }, TOAST_DURATION)
+}
+
+/* =============================================================
+ * 设置 → 音色选择
+ * ============================================================= */
+
+const player = usePlayerStore()
+const studio = useStudioStore()
+
+const timbreOpen = ref(false)
+const timbreId = ref<TimbreId>(DEFAULT_TIMBRE_ID)
+
+/** 音色提交中（面板已关，只用于防止连续切换时重复提交） */
+const timbreSubmitting = ref(false)
+
+/**
+ * 面板里的候选音色。
+ * store 里已有列表就用接口给的，否则用内置音色表 —— 保证面板永远是满的，
+ * 不出现「还没加载完就一片空白」。
+ */
+const timbreOptions = computed<TimbreOption[]>(() =>
+  player.voiceOptions.length > 0 ? player.voiceOptions : [...TIMBRE_OPTIONS],
+)
+
+/** 点「设置」：就地弹面板，并补拉一次音色列表（store 内部有缓存，重复打开不重复请求） */
+function openTimbre(): void {
+  timbreOpen.value = true
+  void player.loadVoiceOptions()
+}
+
+/**
+ * 确认选择：本地立即生效，同时提交给后端（POST /api/v1/voices）。
+ *
+ * 为什么先关面板再请求：面板是模态的，让它一直挂着等网络会显得卡住；
+ * 而音色是否落库并不影响收听，因此不阻塞界面。
+ * 失败时明确说「没提交成功」而不是「选择失败」—— 本地已经生效了。
+ */
+function handleConfirmTimbre(next: TimbreId): void {
+  timbreId.value = next
+  timbreOpen.value = false
+
+  const label = resolveTimbreOption(next).label
+  if (timbreSubmitting.value) {
+    notify(`已选择音色：${label}`)
+    return
+  }
+
+  timbreSubmitting.value = true
+  // 主界面没有「当前场景」，发音人固定用旁白 —— 播客内容统一由旁白讲述
+  const config = buildTimbreVoiceConfig(next, NARRATOR_SPEAKER, NARRATOR_SPEAKER)
+
+  void studio
+    .saveVoice(config)
+    .then((ok) => {
+      notify(ok ? `已选择音色：${label}` : `已选择音色：${label}（提交后端失败，本次收听不受影响）`)
+    })
+    .finally(() => {
+      timbreSubmitting.value = false
+    })
 }
 
 // 页面卸载时清理定时器，避免离开页面后仍在改动已失效的状态
@@ -83,12 +157,21 @@ onBeforeUnmount(() => {
     <main class="nw-home__stage">
       <div class="nw-home__left">
         <HomeBrand />
-        <HomeMenu @feedback="notify" />
-        <ThemeToggle @feedback="notify" />
+        <HomeMenu @feedback="notify" @settings="openTimbre" />
       </div>
 
       <HomeNewsPanel class="nw-home__right" @feedback="notify" />
     </main>
+
+    <!-- 设置 → 音色选择（点菜单「设置」就地弹出，不跳页） -->
+    <TimbreSelectModal
+      v-if="timbreOpen"
+      :value="timbreId"
+      :options="timbreOptions"
+      :loading="player.voiceOptions.length === 0 && player.voiceOptionsError === null"
+      @confirm="handleConfirmTimbre"
+      @close="timbreOpen = false"
+    />
 
     <ToastPill :message="toastMessage" :visible="toastVisible" />
   </div>

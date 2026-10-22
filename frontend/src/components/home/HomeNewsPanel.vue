@@ -24,7 +24,7 @@ const NEWS_ITEMS: readonly HomeNewsItem[] = [
   {
     id: 1,
     date: '1-4-2026',
-    title: '[春季更新] Podcast Engine 1.0 正式版发布：全新故事编辑器与音效库',
+    title: '[春季更新] TaleTrellis 1.0 正式版发布：全新故事编辑器与音效库',
   },
   {
     id: 2,
@@ -39,7 +39,7 @@ const NEWS_ITEMS: readonly HomeNewsItem[] = [
   {
     id: 4,
     date: '27-4-2025',
-    title: 'Podcast Engine 0.20.2：修复若干问题并大幅提升 Windows 端性能',
+    title: 'TaleTrellis 0.20.2：修复若干问题并大幅提升 Windows 端性能',
   },
 ]
 
@@ -66,7 +66,7 @@ function requestSubscribe(): void {
     </div>
 
     <section class="nw-home-news__panel">
-      <h2 class="nw-home-news__head">NEWS</h2>
+      <h2 class="nw-home-news__head">TaleTrellis</h2>
 
       <ul class="nw-home-news__list">
         <li v-for="item in NEWS_ITEMS" :key="item.id" class="nw-home-news__item">

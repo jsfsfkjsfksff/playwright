@@ -1,11 +1,13 @@
 package cn.edu.zut.aigcgal.controller;
 
 import cn.edu.zut.aigcgal.DTO.StepRequest;
+import cn.edu.zut.aigcgal.DTO.TransitionDto;
 import cn.edu.zut.aigcgal.DTO.TrellisGraphDto;
 import cn.edu.zut.aigcgal.DTO.WorldlineEdgeDto;
 import cn.edu.zut.aigcgal.DTO.WorldlineNodeDto;
 import cn.edu.zut.aigcgal.R.R;
 import cn.edu.zut.aigcgal.R.ResultCodeEnum;
+import cn.edu.zut.aigcgal.common.tts.SceneDubbingService;
 import cn.edu.zut.aigcgal.dao.node.PropertyNode;
 import cn.edu.zut.aigcgal.dao.node.Scene;
 import cn.edu.zut.aigcgal.map.PropertyRepository;
@@ -32,6 +34,8 @@ import java.util.*;
         private SceneRepository sceneRepository;
         @Autowired
         private PropertyRepository propertyRepository;
+        @Autowired
+        private SceneDubbingService sceneDubbingService;
 
         // 初始化一个专门呼叫 Python 微服务的 Http 客户端
         private final RestClient pythonClient = createPythonClient();
@@ -72,8 +76,23 @@ import java.util.*;
         if (startScene == null || endScene == null) {
             return R.error(ResultCodeEnum.NOT_FOUND, "起点或终点场景不存在");
         }
+        //如何去除IsStatic为true的情况，对IsStatic的点简单连线前后返回也不行，最好还是都上传，在python端处理，在java端预处理现设一个边，有边的话就不要生成了！
         if (Boolean.TRUE.equals(request.getIsStatic())) {
-            startScene.addChoice(endScene, "静态场景收束", "NONE");
+            ArrayList<Scene> mid = new ArrayList<>();
+            mid.add(startScene);
+            request.getMandatorySceneIds().forEach(keyId -> {
+                Scene keyScene = sceneRepository.findBySceneId(keyId);
+                if (keyScene != null) {
+                    mid.add(keyScene);
+                }
+            });
+            mid.add(endScene);
+            //
+            for (int i = 0; i < mid.size() - 1; i++) {
+                Scene fromScene = mid.get(i);
+                Scene toScene = mid.get(i + 1);
+                fromScene.addChoice(toScene, "静态场景收束", "NONE");
+            }
             sceneRepository.save(startScene);
             return R.success(startScene.getId());
         }
@@ -128,6 +147,39 @@ import java.util.*;
             }
         }
 
+        // 2.5 透传画布单向连线（用户固定分支的 action 里带 [[USER_FIXED]]）
+        //     双向边对已在前端收敛成一条单向边，这里不会收到成对的反向边。
+        List<Map<String, String>> transitionsPayload = new ArrayList<>();
+        if (request.getTransitions() != null) {
+            for (TransitionDto transition : request.getTransitions()) {
+                if (transition.getFromSceneId() == null || transition.getToSceneId() == null) {
+                    continue;
+                }
+
+                // 与 Python 端的 waypoint id 对齐：起点 / 终点统一换成 START / END
+                String fromId = transition.getFromSceneId().equals(request.getStartSceneId())
+                        ? "START" : transition.getFromSceneId();
+                String toId = transition.getToSceneId().equals(request.getMustBeSceneId())
+                        ? "END" : transition.getToSceneId();
+
+                Map<String, String> transitionMap = new HashMap<>();
+                transitionMap.put("fromSceneId", fromId);
+                transitionMap.put("toSceneId", toId);
+                transitionMap.put("action", transition.getAction() != null ? transition.getAction() : "继续");
+                transitionsPayload.add(transitionMap);
+
+                // 主干之外的固定分支端点可能不在必经链上，提前装入 registry 才能落边
+                for (String sceneId : List.of(transition.getFromSceneId(), transition.getToSceneId())) {
+                    if (!sceneRegistry.containsKey(sceneId)) {
+                        Scene scene = sceneRepository.findBySceneId(sceneId);
+                        if (scene != null) {
+                            sceneRegistry.put(sceneId, scene);
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. 组装发往 Python 的最终 payload
         Map<String, Object> payload = new HashMap<>();
         payload.put("startText", startScene.getText() != null ? startScene.getText() : "故事开始");
@@ -136,6 +188,7 @@ import java.util.*;
         payload.put("layers", request.getLayer() != null && request.getLayer() > 0 ? request.getLayer() : 1);
         payload.put("maxActions", request.getMaxActions() != null && request.getMaxActions() > 0 ? request.getMaxActions() : 2);
         payload.put("mandatoryNodes", mandatoryNodesPayload);
+        payload.put("transitions", transitionsPayload);
         payload.put("properties", propertiesPayload);
         payload.put("relations", relationsPayload);
         // 4. 呼叫 Python 端的多锚点 HTN + 状态空间 DP 引擎
@@ -150,6 +203,7 @@ import java.util.*;
         }
 
         // 5. 实例化 AI 新生成的过渡节点
+        List<Scene> newScenes = new ArrayList<>(); // 只给「本次新生成」的场景配音，库里已有的不重复合成
         if (trellis.getNodes() != null) {
             for (WorldlineNodeDto nodeDto : trellis.getNodes()) {
                 if (!sceneRegistry.containsKey(nodeDto.getSceneId())) {
@@ -159,9 +213,13 @@ import java.util.*;
                     newScene.setSpeaker(nodeDto.getSpeaker());
                     newScene.setAudioUrl(nodeDto.getAudioUrl());
                     sceneRegistry.put(nodeDto.getSceneId(), newScene);
+                    newScenes.add(newScene);
                 }
             }
         }
+
+        // 5.5 配音：交给 Python 批量合成，回填 audioUrl（Python 只返回相对路径）
+        sceneDubbingService.dub(newScenes);
 
         // 6. 缝合网格边并落盘
         for (WorldlineEdgeDto edgeDto : trellis.getEdges()) {

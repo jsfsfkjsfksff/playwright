@@ -100,7 +100,7 @@
     box-shadow var(--nw-duration-base) var(--nw-ease-out),
     transform var(--nw-duration-base) var(--nw-ease-out);
 
-  /* 环境动效周期：低频、缓慢（消费方：AudioOrb / AudioWave / AudioSpectrumBars） */
+  /* 环境动效周期：低频、缓慢（消费方：AudioOrb / AudioSpectrumBars） */
   --nw-duration-breathe: 18s;
 
   /* ---------- 层级规范 ---------- */

@@ -2,9 +2,10 @@
  * 创作台接口封装
  * ---------------------------------------------------------------
  * 契约来源：《交互式播客引擎 API 接口文档 (v1.0 严格对齐版)》，基础路径 /api/v1。
- * 职责：把创作台的 UI 动作转换为后端调用，并保持与 services/welcome.ts 一致的三态：
+ * 职责：把创作台与播放域、配音域的 UI 动作转换为后端调用，并保持三态：
  *   1. 已接入后端 → 真实请求（走 api.ts 的 requestCodeJson，按 `{ code, data }` 信封解包，
- *      契约的成功码是 200，见 api.ts 的 API_SUCCESS_CODE）
+ *      契约的成功码是 200，见 api.ts 的 API_SUCCESS_CODE；
+ *      播放域单场景接口的裸对象兼容见 requestFlexibleJson）
  *   2. 演示模式   → 返回 src/services/mock/ 里的本地假数据，链路可完整走通
  *   3. 请求失败   → 原样抛出 ApiRequestError，由调用方展示失败与重试
  *
@@ -15,27 +16,33 @@
  * 本层的返回类型一律是**契约原文的 data 形状**（可能很轻量），
  * 需要完整视图模型时由 stores/studio.ts 负责拼装，不在这里替后端补字段。
  *
- * ⚠️ 后端**尚未实现**的接口（见下方 BACKEND_READY）：无论是否接入后端都继续走 Mock，
- *    避免「编辑 / 删除资源」「导出片段」「播放场景」变成点不通的死链。
+ * ⚠️ 契约未定义 / 后端未实现、由前端按惯例补齐的部分：
+ *    PUT    /api/v1/properties/{nodeId}       更新资源节点  ← 后端**未实现**（Spring 回 405，
+ *            store 会把 405 翻译成可读原因，不把「接口不存在」显示成网络异常）
+ *    DELETE /api/v1/properties/{nodeId}       删除资源节点  ← 后端已实现，真实模式下直接可用
+ *    GET    /api/v1/voices（音色列表）          音色列表     ← 契约没有该接口，
+ *            getVoiceList 目前是**占位实现、不发请求**，只返回内置音色表
  *
- * 后端**已实现**、前端按原文接入的接口（对应 mid 模块的 PropertyController / VoiceController /
- * PEngineController，统一响应体是 `{ code, msg, data }`）：
+ * 契约已定义、前端已按原文实现的接口：
  *    POST   /api/v1/properties               新建资源节点（回执只有 nodeId + status）
  *    GET    /api/v1/properties?type=          资源列表（轻量：nodeId / name / type）
- *    POST   /api/v1/voices                    保存全篇配音配置（全篇唯一，不带角色 id）
- *    GET    /api/v1/voices                     查询全篇配音配置（未配置返回 200 + 默认值）
- *    POST   /api/v1/plan/anchors              保存剧情锚点（请求体即锚点数组）
- *    POST   /api/v1/plan/interpolate           插值补全剧情（请求体对应后端 StepRequest）
+ *    POST   /api/v1/voices                    保存配音配置（全篇唯一，不带 characterId）
+ *    GET    /api/v1/voices                     查询配音配置（无路径参数，未配置返回默认值）
+ *    POST   /api/v1/plan/anchors              保存剧情锚点（请求体是场景数组 List<Scene>）
+ *    POST   /api/v1/plan/interpolate           插值补全剧情（对应后端 StepRequest）
+ *    POST   /api/v1/plan/export-segment        导出片段（返回 url / finalAudioUrl / segments / durationMs）
  *    接入方式：在 frontend/.env.local 写入
- *      VITE_API_MOCK=false            # 唯一开关
- *      VITE_API_BASE_URL=<后端域名>    # 仅前后端不同源时需要；同源留空即可
+ *      VITE_API_BASE_URL=https://<后端域名>
+ *      VITE_API_MOCK=false
  *    UI 层无需改动。
  *
- * TODO: 待后端接入，当前为演示用 Mock —— 下面每个函数里的 Mock 分支
- *       都是临时代码，后端补全接口后连同 src/services/mock/ 整个目录一起删除。
+ * TODO: 待后端接入，当前为演示用 Mock —— 下面每个函数里的 `isStudioMockMode` 分支
+ *       都是临时代码，接入时连同 src/services/mock/ 整个目录一起删除。
  */
 import { API_ENDPOINTS, ApiRequestError, requestCodeJson, requestFlexibleJson } from './api'
 import { API_DEMO_MODE } from './config'
+import { TIMBRE_OPTIONS } from '@/types/studio'
+import { parseSubtitles } from '@/utils/subtitles'
 import {
   mockCreateProperty,
   mockDeleteProperty,
@@ -45,10 +52,12 @@ import {
   mockInterpolatePlan,
   mockListProperties,
   mockReadAnchors,
+  mockReadEdges,
   mockSaveSceneAnchors,
   mockSaveVoiceConfig,
   mockUpdateProperty,
   setMockAnchors,
+  setMockEdges,
 } from './mock/studioBackend'
 import type {
   ExportSegmentData,
@@ -66,6 +75,11 @@ import type {
   PropertyUpdateResult,
   SceneAnchor,
   SceneAnchorListData,
+  SceneWireItem,
+  StoryEdge,
+  StoryGraphPayload,
+  StoryNode,
+  TimbreOption,
   VoiceConfig,
   VoiceConfigData,
 } from '@/types/studio'
@@ -75,31 +89,6 @@ import type {
  * 为 true 时本文件不发出任何真实网络请求，全部返回本地假数据；UI 据此显示演示模式提示。
  */
 export const isStudioMockMode: boolean = API_DEMO_MODE
-
-/**
- * 后端是否已实现某个接口 —— 后端没有的先不管。
- *
- * 本项目后端只有 properties / voices / plan 三个 Controller，因此下面这四项**尚未实现**，
- * 无论是否接入后端都继续由 Mock 提供，保证
- * 「主页 → 选择故事 → 资源添加 → 操作编辑 → 一键生成 → 播放页」这条链路仍然点得通。
- * 后端补上对应接口后，把这里改成 true 即可自动切到真实请求。
- */
-const BACKEND_READY = {
-  /** PUT /api/v1/properties/{nodeId} */
-  updateProperty: false,
-  /** DELETE /api/v1/properties/{nodeId} */
-  deleteProperty: false,
-  /** POST /api/v1/plan/export-segment */
-  exportSegment: false,
-  /** GET /api/v1/play/scene/{sceneId} */
-  playScene: false,
-} as const
-
-/** 导出成品是否仍来自本地 Mock —— 界面用它说明成品来源，不能说成「后端已交付」 */
-export const isExportMockMode: boolean = isStudioMockMode || !BACKEND_READY.exportSegment
-
-/** 播放场景是否仍来自本地 Mock —— 播放页据此说明场景来源 */
-export const isPlayMockMode: boolean = isStudioMockMode || !BACKEND_READY.playScene
 
 /** 单项资源的路径：`/api/v1/properties/{nodeId}` */
 function propertyPath(nodeId: string): string {
@@ -129,24 +118,23 @@ export async function createProperty(
 
 /**
  * 更新资源节点 —— PUT /api/v1/properties/{nodeId}
- * ⚠️ 后端尚未实现该接口（BACKEND_READY.updateProperty = false），因此本条**始终**走 Mock；
- *    路径与回执形状是按 REST 惯例假定的（回执假定与 POST 同形）。后端补上后把开关改为 true，
- *    若回执不一致，再同步改 PropertyUpdateResult。
+ * ⚠️ 契约里没有改 / 删接口：路径、方法名与回执形状都是前端按 REST 惯例补的
+ *    （回执假定与 POST 同形）。后端补上后若不一致，只改本函数与 PropertyUpdateResult。
  */
 export async function updateProperty(
   nodeId: string,
   payload: PropertyUpdatePayload,
 ): Promise<PropertyUpdateResult> {
-  if (isStudioMockMode || !BACKEND_READY.updateProperty) {
+  if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock
     return mockUpdateProperty(nodeId, payload)
   }
   return requestCodeJson<PropertyUpdateResult>('PUT', propertyPath(nodeId), { body: payload })
 }
 
-/** 删除资源节点 —— DELETE /api/v1/properties/{nodeId}（⚠️ 同上，后端尚未实现，始终走 Mock） */
+/** 删除资源节点 —— DELETE /api/v1/properties/{nodeId}（⚠️ 同上，契约为空，属按惯例补充） */
 export async function deleteProperty(nodeId: string): Promise<void> {
-  if (isStudioMockMode || !BACKEND_READY.deleteProperty) {
+  if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock
     return mockDeleteProperty(nodeId)
   }
@@ -170,10 +158,17 @@ export async function listProperties(type?: PropertyType): Promise<PropertyListD
 }
 
 /* =============================================================
- * 配音（全篇唯一，与资源无关）
+ * 配音
  * ============================================================= */
 
-/** 保存全篇配音配置 —— POST /api/v1/voices（全篇唯一，重复提交只更新同一条） */
+/**
+ * 保存配音配置 —— POST /api/v1/voices
+ *
+ * 当前唯一的调用方是**播放页的音色选择**：听众选定音色后，由
+ * `types/studio.ts` 的 buildTimbreVoiceConfig 组装请求体，经 stores/studio.ts 的
+ * saveVoice 落到这里（组装规则与待确认项写在该函数上）。
+ * 创作台侧的配音配置弹窗已随「音色选择迁到播放页」一并删除。
+ */
 export async function saveVoiceConfig(payload: VoiceConfig): Promise<VoiceConfigData> {
   if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock
@@ -183,15 +178,42 @@ export async function saveVoiceConfig(payload: VoiceConfig): Promise<VoiceConfig
 }
 
 /**
- * 查询全篇配音配置 —— GET /api/v1/voices（**无路径参数**）
- * 未配置时后端同样返回 200 + 默认值（data.configured = false），不会 404。
+ * 查询全篇配音配置 —— **GET /api/v1/voices**（后端无路径参数）。
+ * ⚠️ 与后端实际实现对齐：配音域是「全篇唯一」的一条配置，因此该接口既没有
+ *    characterId 路径参数，也不会在未配置时返回 404（返回 200 + 默认值，configured=false）。
+ *    入参 characterId 仅用于前端本地缓存的键（见 stores/studio.ts 的 loadVoice）。
+ *
+ * 当前**没有调用方**：播放页只提交音色（POST），不做回显 ——
+ * 要「进入播放页时预选上次保存的音色」时，在 stores/studio.ts 的 loadVoice 接上即可。
  */
-export async function getVoiceConfig(): Promise<VoiceConfigData> {
+export async function getVoiceConfig(characterId: string): Promise<VoiceConfigData> {
   if (isStudioMockMode) {
-    // TODO: 待后端接入，当前为演示用 Mock
-    return mockGetVoiceConfig()
+    // TODO: 待后端接入，当前为演示用 Mock（该角色没配过时按 404 拒绝）
+    return mockGetVoiceConfig(characterId)
   }
-  return requestCodeJson<VoiceConfigData>('GET', API_ENDPOINTS.studio.voices)
+  // ⚠️ 与后端实际实现对齐：`VoiceController.get()` 映射的是 **GET /api/v1/voices**（无路径参数），
+  //    查询「全篇唯一」的那条配置，未配置时也返回 200 + 默认值（configured=false），不是 404。
+  //    characterId 仅作为前端本地缓存的键随结果回填，后端并不按角色区分。
+  const profile = await requestCodeJson<VoiceConfigData>('GET', API_ENDPOINTS.studio.voices)
+  return { ...profile, characterId }
+}
+
+/**
+ * 音色列表 —— 播放页「音色选择」面板的数据源。
+ *
+ * ⚠️ **占位实现，当前不发任何请求**：
+ *   契约 v1.0 只定义了「按角色查询配音配置」（GET /voices/{characterId}），
+ *   **没有**「音色列表」接口。播放页要的是「可选音色」（与角色无关），
+ *   因此这里先按面板需要的形状（id / label / description）占位，
+ *   等后端确认接口后，把函数体换成一次 requestCodeJson<VoiceListData>(...) 即可，
+ *   store 与组件都不需要改。
+ *
+ *   TODO: 后端就绪后改为真实请求（例如 GET /api/v1/voices?available=true 或
+ *   GET /api/v1/voices/timbres），并在 API_ENDPOINTS.studio 里登记路径。
+ */
+export async function getVoiceList(): Promise<TimbreOption[]> {
+  // 未接后端：返回内置音色表的拷贝（不是引用，避免调用方改到模块级常量）
+  return TIMBRE_OPTIONS.map((option) => ({ ...option }))
 }
 
 /* =============================================================
@@ -199,25 +221,50 @@ export async function getVoiceConfig(): Promise<VoiceConfigData> {
  * ============================================================= */
 
 /**
- * 保存剧情锚点 —— POST /api/v1/plan/anchors
- * 请求体直接是锚点数组，不额外包一层（数组元素即契约里的
- * `{ sceneId, text, speaker, timeStage }`，其中 timeStage 是数字坐标）。
- * ⚠️ 契约未明确收单对象还是数组（文档给的是两个并列对象），当前按数组实现。
+ * 保存剧情图 —— POST /api/v1/plan/anchors
+ *
+ * 前端内部用**扁平双 List**表达剧情图（见 types/studio.ts 的 StoryGraphPayload）：
+ *   nodes（点集，含坐标 / 文本 / 音频）+ edges（边集，只存 id 引用），互不嵌套。
+ *
+ * ⚠️ 提交给后端时**只发 nodes 里的场景字段**（见下方 toSceneWireItems）：
+ *    后端该接口的请求体是 `@RequestBody List<Scene>`（直接是场景数组）。
+ *    `Scene` 实体没有 cardName / x / y，也没有接收连线的字段 ——
+ *    「双 List + 画布连线」的持久化属于后端尚未支持的契约缺口，暂时留在前端本地态。
  */
 export async function saveSceneAnchors(
-  anchors: readonly SceneAnchor[],
+  graph: StoryGraphPayload,
 ): Promise<SceneAnchorListData> {
   if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock
-    return mockSaveSceneAnchors(anchors)
+    return mockSaveSceneAnchors(graph)
   }
+  // ⚠️ 与后端实际实现对齐：`PEngineController.firstTwo` 的请求体是
+  //    `@RequestBody List<Scene>` —— **直接是场景数组**，不是 `{ nodes, edges }` 双 List
+  //    （发双 List 会被后端判成反序列化失败）。后端 Scene 只有
+  //    sceneId / text / speaker / audioUrl / timeStage，画布连线与 cardName / x / y
+  //    在当前后端无处安放，因此这里只提交后端认得的字段，其余留在前端本地态。
   return requestCodeJson<SceneAnchorListData>('POST', API_ENDPOINTS.studio.anchors, {
-    body: anchors,
+    body: toSceneWireItems(graph.nodes),
   })
 }
 
 /**
- * 演示模式专用：把当前锚点同步给本地假后端。
+ * 剧情节点（前端扁平结构）→ 后端 `Scene` 实体的线上形状。
+ * 字段名转换：`audioURL`（前端编辑态）→ `audioUrl`（后端 `Scene.audioUrl`）。
+ * 只提交后端 `Scene` 里存在的字段 —— 未知字段会被后端忽略，也不要指望它入库。
+ */
+function toSceneWireItems(nodes: readonly StoryNode[]): readonly SceneWireItem[] {
+  return nodes.map((node) => ({
+    sceneId: node.sceneId,
+    text: node.text,
+    speaker: node.speaker,
+    audioUrl: node.audioURL,
+    timeStage: node.timeStage,
+  }))
+}
+
+/**
+ * 演示模式专用：把当前锚点（点集）同步给本地假后端。
  *
  * 两个用途：
  *   1. 「一键生成」需要知道锚点 —— `POST /plan/interpolate` 的请求体（StepRequest）里
@@ -232,6 +279,19 @@ export function syncMockAnchors(anchors: readonly SceneAnchor[]): void {
     return
   }
   setMockAnchors(anchors)
+}
+
+/**
+ * 演示模式专用：把连线（边集）同步给本地假后端并落盘。
+ * 与 syncMockAnchors 一样，真实后端模式下是空操作。
+ *
+ * TODO: 待后端接入，当前为演示用 Mock
+ */
+export function syncMockEdges(edges: readonly StoryEdge[]): void {
+  if (!isStudioMockMode) {
+    return
+  }
+  setMockEdges(edges)
 }
 
 /**
@@ -250,11 +310,21 @@ export function readMockAnchors(): SceneAnchorListData {
 }
 
 /**
+ * 演示模式专用：回读假后端持有的连线；真实后端模式下返回空数组
+ * （调用方同样要先判断模式，不要拿它覆盖会话里的边集）。
+ *
+ * TODO: 待后端接入，当前为演示用 Mock
+ */
+export function readMockEdges(): StoryEdge[] {
+  return isStudioMockMode ? mockReadEdges() : []
+}
+
+/**
  * 按锚点插值补全剧情 —— POST /api/v1/plan/interpolate
- * 请求体严格对应后端 StepRequest（注意 MustBeSceneId 的大写 M；
- * static 为 true 时 layer 无效）。
- * ⚠️ 契约只说「返回 200 状态码，表示图谱已成功裂变并缝合」，未定义 data 结构；
- *    这里按 InterpolateResultData 假定，待后端确认。
+ * 请求体严格对应后端 StepRequest（键名 mustBeSceneId / isStatic，见 types/studio.ts）；
+ * isStatic 为 true 时 layer 无效。
+ * ⚠️ 与后端实际回执对齐：data 是起点场景的**数字 id**（`startScene.getId()`），
+ *    不是 `{ scenes: [...] }`；类型见 InterpolateResultData，调用方需先做形状判断。
  */
 export async function interpolatePlan(
   payload: InterpolateRequest,
@@ -270,12 +340,11 @@ export async function interpolatePlan(
 
 /**
  * 导出片段 —— POST /api/v1/plan/export-segment
- * ⚠️ 后端尚未实现该接口（BACKEND_READY.exportSegment = false），因此本条**始终**走 Mock；
- *    契约定死了「导出不能由前端直接截取后端返回的 list」，成品必须由后端交付，
- *    所以后端补上之前宁可给本地合成的静音音频，也不在前端自行拼接。
+ * ⚠️ 契约未定义返回体，且明确要求「导出不能由前端直接截取后端返回的 list」，
+ *    成品（拼接好的纯音频）由后端交付；这里按 ExportSegmentData 假定。
  */
 export async function exportSegment(payload: ExportSegmentRequest): Promise<ExportSegmentData> {
-  if (isStudioMockMode || !BACKEND_READY.exportSegment) {
+  if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock（成品是本地合成的静音音频地址）
     return mockExportSegment(payload.sceneIds)
   }
@@ -304,6 +373,11 @@ function readText(value: unknown): string {
   return ''
 }
 
+/** 去掉 action 里的固定分支协议标记（Java 落库时原样保留了它） */
+function stripUserFixedMarker(action: string): string {
+  return action.replace(/\[\[USER_FIXED\]\]/g, '').trim()
+}
+
 /**
  * 把一条分支收敛成 PlayEdge。
  * 返回 null 表示这条分支不可用（缺 targetScene 或没有 sceneId），由调用方丢弃并计数 ——
@@ -321,7 +395,7 @@ function readEdge(value: unknown): PlayEdge | null {
   }
 
   return {
-    action: readText(raw.action),
+    action: stripUserFixedMarker(readText(raw.action)),
     condition: readText(raw.condition),
     targetScene: target,
   }
@@ -379,31 +453,21 @@ function readPlayScene(value: unknown, depth: number): PlayScene | null {
   return scene
 }
 
-/** 真实字幕时间轴（契约未定义）：只有形状完全可用时才采信，否则返回空数组走估算 */
+/**
+ * 真实字幕时间轴（契约未定义）。
+ *
+ * 本轮需求：后端可能给「结构化数组」，也可能直接扔一段 LRC / SRT / VTT / JSON 文本，
+ * 因此这里统一交给 utils/subtitles.ts 的 parseSubtitles：
+ *   - 数组 → 校验并规范化；
+ *   - 字符串 → 按格式解析（解析不出来返回空数组）；
+ *   - 空 → 空数组，播放页据此退回「按句长估算」。
+ */
 function readSubtitles(value: unknown): PlaySubtitleCue[] {
-  if (!Array.isArray(value)) {
+  if (typeof value !== 'string' && !Array.isArray(value)) {
     return []
   }
 
-  const cues: PlaySubtitleCue[] = []
-
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null) {
-      return []
-    }
-
-    const raw = item as Record<string, unknown>
-    const start = raw.start
-    const end = raw.end
-
-    if (typeof start !== 'number' || typeof end !== 'number' || !Number.isFinite(start) || !Number.isFinite(end)) {
-      return []
-    }
-
-    cues.push({ text: readText(raw.text), start, end })
-  }
-
-  return cues
+  return parseSubtitles(value)
 }
 
 /**
@@ -430,9 +494,8 @@ function requirePlayScene(payload: unknown): PlayScene {
  * 页面拿到的一定是形状正确的对象（拿不到场景则抛错，由 store 展示失败）。
  */
 export async function getPlayScene(sceneId: string): Promise<PlayScene> {
-  if (isStudioMockMode || !BACKEND_READY.playScene) {
+  if (isStudioMockMode) {
     // TODO: 待后端接入，当前为演示用 Mock
-    // 后端尚未实现 GET /play/scene/{sceneId}，所以这里的场景图由假后端提供；
     // 返回的场景同样要过 requirePlayScene：形状与真实后端完全一致；
     // 音频是前端合成的静音 WAV（见 mock/silentAudio.ts），仍由真实 <audio> 的 currentTime 驱动。
     return requirePlayScene(await mockGetPlayScene(sceneId))

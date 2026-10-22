@@ -63,6 +63,28 @@ async def test_use_provider_switches_target():
     primary.synthesize.assert_not_awaited()
 
 
+@pytest.mark.anyio
+async def test_synthesize_translates_frontend_timbre_id():
+    """回归：前端稳定标识（elder-warm）必须翻译成真实音色名再交给 provider。
+
+    曾经原样透传，被百炼回 400 InvalidParameter「[cosyvoice:]Engine error [411]」。
+    """
+    provider = _provider("dashscope")
+    await _service(provider).synthesize(TTSInput(text="台词", voice="elder-warm"))
+
+    sent = provider.synthesize.await_args.args[0]
+    assert sent.voice == "longsanshu_v3.1"
+
+
+@pytest.mark.anyio
+async def test_synthesize_keeps_real_voice_untouched():
+    provider = _provider("dashscope")
+    await _service(provider).synthesize(TTSInput(text="台词", voice="longanhuan_v3.1"))
+
+    sent = provider.synthesize.await_args.args[0]
+    assert sent.voice == "longanhuan_v3.1"
+
+
 def test_use_unknown_provider_raises_and_keeps_current():
     service = _service(_provider("dashscope"))
     with pytest.raises(TTSProviderNotFoundException):
@@ -147,15 +169,17 @@ async def test_synthesize_many_keeps_order_and_isolates_failures():
 def test_build_input_uses_voice_of_speaker():
     voice_map = VoiceMap(
         default=VoiceSpec(voice="zh-CN-xiaoxiao", rate=1.0),
-        speakers={"少女": VoiceSpec(voice="zh-CN-xiaoyi", rate=1.1, pitch=-2.0)},
+        speakers={"少女": VoiceSpec(voice="zh-CN-xiaoyi", rate=1.1, pitch=0.8)},
     )
     service = _service(voice_map=voice_map)
 
     assert service.build_input("台词", "少女") == TTSInput(
-        text="台词", voice="zh-CN-xiaoyi", rate=1.1, pitch=-2.0
+        text="台词", voice="zh-CN-xiaoyi", rate=1.1, pitch=0.8
     )
-    assert service.build_input("台词", "路人甲") == TTSInput(text="台词")
-    assert service.build_input("台词") == TTSInput(text="台词")
+    assert service.build_input("台词", "路人甲") == TTSInput(
+        text="台词", voice="zh-CN-xiaoxiao"
+    )
+    assert service.build_input("台词") == TTSInput(text="台词", voice="zh-CN-xiaoxiao")
     assert service.build_input("台词", "  少女  ").voice == "zh-CN-xiaoyi"
 
 

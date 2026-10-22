@@ -7,13 +7,19 @@
  * 说明：资源浏览页尚未开发，这里先给出**清晰的路由占位**，
  * 保证「资源」入口可点击、可键盘访问，不出现失效按钮。
  *
- * 本次变更（创作台拆成「入口 + 两个子页」）：
+ * 本次变更（删除废弃页面）：
+ *   - 删除 `/welcome`（WelcomeView 欢迎页）与 `/features`（FeatureView 功能选择页）——
+ *     两页是旧版流程的中间态，现在的入口链路是「主界面 → 创作台 → 播放页」，
+ *     没有任何页面链接到它们，保留只会让人以为还有一条走不通的路。
+ *   - `ROUTE_NAMES` 里对应的 `welcome` / `features` 一并移除：没有任何消费方引用它们。
+ *   - 两条旧地址**不写重定向**：它们会落到下面的通配路由（→ 首页），
+ *     与「已删除的页面」语义一致，也避免在路由表里留下两行没人访问的记录。
+ *   - 欢迎域接口（`/api/v1/welcome/*`）随页面一起删除，见 services/studio.ts 头部说明。
+ *
+ * 创作台的入口结构没有变化：
  *   - `/studio`             → StudioView（**故事选择页**，创作台的入口）
  *   - `/studio/resources`   → StudioResourcesView（资源管理）
  *   - `/studio/operations`  → StudioOperationsView（操作编辑）
- *   原来把「资源 / 操作」做成同一页里的两个 Tab；现在改为独立页面 + 路由，
- *   子页面各自带「返回选择页」，选择页负责总览与「一键生成」。
- *   - 原 `/create` 重定向到 `/studio` 保持不变；`/`、`/welcome`、`/features`、`/resources` 未改动。
  *
  * 注意：BackLink 的「返回首页」默认目标是 ROUTE_NAMES.home（`/`）；
  * 创作台子页面通过 `to` 显式指向 ROUTE_NAMES.studio。
@@ -35,9 +41,6 @@ declare module 'vue-router' {
 export const ROUTE_NAMES = {
   /** 首页 = 主界面（左侧主菜单 + 右侧公告） */
   home: 'home',
-  /** 欢迎页，保留可用，不再是默认入口 */
-  welcome: 'welcome',
-  features: 'features',
   /** 创作台入口：故事选择页 */
   studio: 'studio',
   /** 创作台 · 资源管理（角色 / 规则 / 实体） */
@@ -56,19 +59,6 @@ export const ROUTES: readonly RouteRecordRaw[] = [
     name: ROUTE_NAMES.home,
     component: () => import('@/pages/HomeView.vue'),
     meta: { title: '主界面' },
-  },
-  {
-    // 欢迎页：与主界面并列存在，可通过 /welcome 直接访问
-    path: '/welcome',
-    name: ROUTE_NAMES.welcome,
-    component: () => import('@/pages/WelcomeView.vue'),
-    meta: { title: '欢迎' },
-  },
-  {
-    path: '/features',
-    name: ROUTE_NAMES.features,
-    component: () => import('@/pages/FeatureView.vue'),
-    meta: { title: '功能选择' },
   },
   {
     // 创作台入口：先选故事，再进「资源管理」或「操作编辑」

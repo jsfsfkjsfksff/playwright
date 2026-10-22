@@ -7,7 +7,15 @@
  *   → themes/day（日间预留位，当前为空）
  *   → base（重置与元素基线）
  *   → utilities（通用工具类）
- *   → theme（共享视觉原语与关键帧）
+ *   → naive-overrides（把 Naive UI 组件拉回站内材质，必须最后加载）
+ *
+ * naive-overrides 放最后是有原因的：它覆盖的是第三方库自己的 class
+ * （.n-button / .n-modal 等），同权重下后加载的才生效；
+ * Naive 自身的样式由 naive-ui 的 JS 入口按需注入，早于本文件。
+ *
+ * 历史：这里曾有一层 theme.css（共享视觉原语 `.nw-glass`）。
+ * 它唯一的消费方 GlassPanel 早已改成自带材质（.nw-glass-panel），
+ * 该文件里再也没有被引用的规则，因此整文件与其 @import 一并删除。
  *
  * 页面样式写在页面组件内，不在此统一汇集。
  */
@@ -17,4 +25,4 @@
 @import './themes/day.css';
 @import './base.css';
 @import './utilities.css';
-@import './theme.css';
+@import './naive-overrides.css';

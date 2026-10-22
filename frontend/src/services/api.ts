@@ -6,34 +6,28 @@
  *
  * 传输层用浏览器原生 fetch（项目未引入 axios），因此这里是全站唯一的请求出口：
  *   - 路径集中登记在 API_ENDPOINTS；
- *   - 解包与错误语义集中在 readSuccessEnvelope / readCodeEnvelope。
+ *   - 解包与错误语义集中在 readCodeEnvelope。
  *
- * 两种响应信封并存（不要混用）：
- *   1. `{ success, data }` —— 项目现存接口（欢迎页）用，入口是 postJson；
- *   2. `{ code, msg, data }` —— 创作台 /api/v1/* 用（后端 R<T> 的实际字段名是 msg），
- *      入口是 requestCodeJson。
+ * 响应信封只有一种：契约的 `{ code, data }`（创作台 / 配音域 / 播放域）。
+ * 唯一例外是播放域的单场景接口，契约示例给的是**裸对象**，因此多一个
+ * requestFlexibleJson 兼容入口（信封与裸对象都认）。
+ *
+ * 历史：这里曾并行维护 `{ success, data }`（欢迎页用）与 `{ code, data }` 两套信封。
+ * 欢迎页与其接口域已删除，`postJson` / `readSuccessEnvelope` / `ApiEnvelope` 随之移除，
+ * 避免留下第二个没人调用的解包入口。
  */
 import { buildApiUrl } from './config'
-import type { ApiEnvelope, CodeEnvelope } from '@/types/api'
+import type { CodeEnvelope } from '@/types/api'
 
 /** 接口路径集中管理，避免散落在组件中 */
 export const API_ENDPOINTS = {
-  /*
-   * 欢迎页两个动作（契约文档 v1.0 未收录这一域，路径以前端约定为准，待后端确认）。
-   * ⚠️ 前缀与契约基础路径一致：/api/v1。早期版本写的是 /api/welcome/*，
-   *    与契约「基础路径: /api/v1」不符，已按统一前缀修正。
-   */
-  /** 进入收听主界面（待后端提供） */
-  enter: '/api/v1/welcome/enter',
-  /** 教程引导（待后端提供） */
-  tutorial: '/api/v1/welcome/tutorial',
-  /** 创作台（/studio）：资源 / 配音 / 剧情锚点与生成 */
+  /** 创作台（/studio）与配音域：资源 / 配音 / 剧情锚点与生成 */
   studio: {
     /** 资源节点：列表用完整路径，单项（改 / 删）为 /{nodeId} */
     properties: '/api/v1/properties',
-    /** 配音：全篇唯一一条，保存与查询都是 POST / GET /api/v1/voices（无路径参数） */
+    /** 全篇配音配置：POST 保存 / GET 查询（后端无路径参数，全篇唯一） */
     voices: '/api/v1/voices',
-    /** 保存剧情锚点 */
+    /** 保存剧情锚点（请求体是场景数组，见 services/studio.ts 的 saveSceneAnchors） */
     anchors: '/api/v1/plan/anchors',
     /** 按锚点插值补全剧情 */
     interpolate: '/api/v1/plan/interpolate',
@@ -55,17 +49,10 @@ export const API_ENDPOINTS = {
 export class ApiRequestError extends Error {
   readonly status: number | null
 
-  /**
-   * 后端业务码（cn.edu.zut.aigcgal.R.BusinessCodeEnum）；没有则为 null。
-   * 需要按码分支时用它，不要去比对 msg 文案。
-   */
-  readonly errCode: string | null
-
-  constructor(message: string, status: number | null = null, errCode: string | null = null) {
+  constructor(message: string, status: number | null = null) {
     super(message)
     this.name = 'ApiRequestError'
     this.status = status
-    this.errCode = errCode
   }
 }
 
@@ -94,23 +81,11 @@ function buildQueryString(query?: QueryParams): string {
   return serialized === '' ? '' : `?${serialized}`
 }
 
-/** HTTP 状态非 2xx：统一抛出，两个信封共用 */
+/** HTTP 状态非 2xx：统一抛出，各入口共用 */
 async function ensureOk(response: Response): Promise<void> {
   if (!response.ok) {
     throw new ApiRequestError(`接口返回异常状态：${response.status}`, response.status)
   }
-}
-
-/** 成功标记信封：`{ success, data, message? }` */
-async function readSuccessEnvelope<TData>(response: Response): Promise<TData> {
-  await ensureOk(response)
-
-  const envelope = (await response.json()) as ApiEnvelope<TData>
-  if (!envelope.success) {
-    throw new ApiRequestError(envelope.message ?? '接口返回失败', response.status)
-  }
-
-  return envelope.data
 }
 
 /**
@@ -120,20 +95,15 @@ async function readSuccessEnvelope<TData>(response: Response): Promise<TData> {
  */
 export const API_SUCCESS_CODE = 200
 
-/**
- * 业务码信封：后端 `R<T>` 的实际字段是 `{ code, msg, errCode, data }`
- * （见 cn.edu.zut.aigcgal.R.R 与 ResultCodeEnum：成功码 200，失败说明放在 msg，
- *  需要按码分支时看 errCode）。
- */
+/** 业务码信封：`{ code, msg?, errCode?, data }`（与后端 `R<T>` 一致） */
 async function readCodeEnvelope<TData>(response: Response): Promise<TData> {
   await ensureOk(response)
 
   const envelope = (await response.json()) as CodeEnvelope<TData>
   if (envelope.code !== API_SUCCESS_CODE) {
     throw new ApiRequestError(
-      envelope.msg ?? envelope.message ?? `接口返回业务失败码：${envelope.code}`,
+      envelope.msg ?? `接口返回业务失败码：${envelope.code}`,
       response.status,
-      envelope.errCode ?? null,
     )
   }
 
@@ -141,23 +111,7 @@ async function readCodeEnvelope<TData>(response: Response): Promise<TData> {
 }
 
 /**
- * 发送 POST 请求并按「成功标记信封」解包（项目现存接口）。
- *
- * ⚠️ 待接入：仅当 .env 中配置了 VITE_API_BASE_URL 且关闭 mock 时才会真实调用。
- */
-export async function postJson<TData>(path: string, body: unknown): Promise<TData> {
-  const response = await fetch(buildApiUrl(path), {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    credentials: 'same-origin',
-    body: JSON.stringify(body),
-  })
-
-  return readSuccessEnvelope<TData>(response)
-}
-
-/**
- * 按「业务码信封」发起请求（创作台 /api/v1/* 全部走这里）。
+ * 按「业务码信封」发起请求（创作台 / 配音域 /api/v1/* 全部走这里）。
  * 一个入口覆盖 GET / POST / PUT / PATCH / DELETE：不为每种方法各写一份，
  * 解包与错误语义自然保持一致。
  *
@@ -197,20 +151,15 @@ function readBusinessCode(payload: unknown): number | null {
   return typeof code === 'number' ? code : null
 }
 
-/** 读出后端给的人类可读说明（错误信封一般只有 code + msg，兼容 message 写法） */
+/** 读出后端给的人类可读说明（错误信封一般是 code + msg） */
 function readBusinessMessage(payload: unknown): string | null {
   if (typeof payload !== 'object' || payload === null) {
     return null
   }
 
-  const raw = payload as { msg?: unknown; message?: unknown }
-  for (const candidate of [raw.msg, raw.message]) {
-    if (typeof candidate === 'string' && candidate !== '') {
-      return candidate
-    }
-  }
-
-  return null
+  const source = payload as { msg?: unknown; message?: unknown }
+  const raw = typeof source.msg === 'string' ? source.msg : source.message
+  return typeof raw === 'string' && raw !== '' ? raw : null
 }
 
 /**

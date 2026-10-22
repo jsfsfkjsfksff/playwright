@@ -21,8 +21,6 @@ const props = defineProps<{
   timeStage: number
   /** 属于本阶段的锚点（并列） */
   anchors: readonly SceneAnchor[]
-  /** 说话人下拉的数据来源 */
-  characters: readonly string[]
   /** 当前正在被拖拽的锚点 id；为 null 表示没有拖拽在进行 */
   draggingSceneId: string | null
 }>()
@@ -103,7 +101,6 @@ watch(
       <li v-for="anchor in anchors" :key="anchor.sceneId" class="nw-timeline-stage__slot">
         <AnchorCard
           :anchor="anchor"
-          :characters="characters"
           :dragging="draggingSceneId === anchor.sceneId"
           @update="(patch) => emit('updateAnchor', anchor.sceneId, patch)"
           @remove="emit('removeAnchor', anchor.sceneId)"

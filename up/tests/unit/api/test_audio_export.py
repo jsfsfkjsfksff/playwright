@@ -41,7 +41,8 @@ def test_export_returns_relative_url(client, static_dir, mp3_kit):
     assert body["status"] == "OK"
     assert body["url"] == f"static/exports/{body['filename']}"
     assert body["segments"] == 2
-    assert body["sizeBytes"] == 5 * mp3_kit.frame_size
+    # 两段之间会插入静音间隔，体积比纯首尾相接更大
+    assert body["sizeBytes"] > 5 * mp3_kit.frame_size
     assert (static_dir / "exports" / body["filename"]).is_file()
 
 

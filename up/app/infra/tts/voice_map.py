@@ -1,8 +1,13 @@
-"""说话人 -> 音色映射。
+"""音色解析：把"标识"翻译成 TTS 引擎真正认的音色名。
 
-文档里的「语音档案」（POST /voices）记录在 Java 侧的图库里；Python 这边
-用 configs/voices.yaml 把世界线节点上的 speaker 名映射成具体音色参数，
-避免所有角色都用一个声音念。
+这里有两件不同的事，别混：
+
+1. **说话人 → 音色**（`VoiceMap`，配置在 `configs/voices.yaml`）：
+   按世界线节点上的 `speaker` 名挑音色，避免所有角色一个声音。
+
+2. **前端音色标识 → 百炼真实音色名**（`resolve_timbre_alias`，见文件末尾）：
+   契约（前端交接文档）约定 `voiceName` 是"前端与后端约定的稳定标识"
+   （如 `elder-warm`），**不是 TTS 引擎的真实发音人名** —— 映射是后端的责任。
 """
 
 from dataclasses import dataclass
@@ -23,7 +28,7 @@ class VoiceSpec:
 
     voice: str
     rate: float = 1.0
-    pitch: float | None = None
+    pitch: float = 1.0
 
 
 class VoiceMap:
@@ -57,7 +62,8 @@ def _spec_from(raw: object, field: str) -> VoiceSpec:
     try:
         rate = float(raw.get("rate", settings.tts_default_rate))
         pitch_raw = raw.get("pitch")
-        pitch = None if pitch_raw is None else float(pitch_raw)
+        # 音调是 [0.5, 2.0] 的倍数（官方文档），不配就是原调 1.0
+        pitch = 1.0 if pitch_raw is None else float(pitch_raw)
     except (TypeError, ValueError) as e:
         raise ConfigException(f"voices 配置的 {field} 数值非法: {e}") from e
 
@@ -90,3 +96,39 @@ def load_voice_map(path: Path | None = None) -> VoiceMap:
             for name, cfg in speakers_raw.items()
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 前端音色标识 → 百炼真实音色名
+# ---------------------------------------------------------------------------
+
+# 键是前端的 TimbreId（见 frontend/src/types/studio.ts 的 TIMBRE_OPTIONS），
+# 值是 qwen-audio-3.1-tts-flash 官方音色列表里的 voice 参数（区分大小写）。
+#
+# 曾经缺这一层，导致前端标识被原样透传给百炼：服务端直接回
+# 400 InvalidParameter「[cosyvoice:]Engine error [411]: TTS speak operation failed」，
+# 音频一条都出不来 —— 因为百炼明确要求「所选音色必须属于当前模型支持的音色列表，
+# 不能跨模型混用」。
+#
+# 取值是按前端标签的声线倾向挑的：
+#   男声-磁性 → 睿智轻熟男；女声-温柔 → 知性温柔女（白晴岚）；童声 → 阳光男童声；
+#   旁白-沉稳 → 稳重成熟、官方标注适用旁白；长者-温厚 → 沉稳质感（有声书）。
+# 想换音色只改这里，前端与 Java 都不用动。
+TIMBRE_ALIASES: dict[str, str] = {
+    "male-magnetic": "longanzhi_v3.1",
+    "female-gentle": "baiqinglan_v3.1",
+    "child": "longniuniu_v3.1",
+    "narrator-calm": "wenhuaizhi_v3.1",
+    "elder-warm": "longsanshu_v3.1",
+}
+
+
+def resolve_timbre_alias(voice: str | None) -> str | None:
+    """把前端音色标识翻译成真实音色名；未收录的取值**原样返回**。
+
+    原样返回是有意的：直接传真实音色名（如 `longanhuan_v3.1`）也必须能用，
+    否则调 TTS 就没法绕过这层映射做实验了。
+    """
+    if voice is None:
+        return None
+    return TIMBRE_ALIASES.get(voice.strip(), voice)

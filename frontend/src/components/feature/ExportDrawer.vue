@@ -7,7 +7,10 @@
  *   并且明确要求「导出不能前端直接截取后端返回的 list」——
  *   成品由后端把选中节点的音频按顺序拼接后交付，前端只负责画勾选与接收结果。
  *
- * 因此这里：勾选顺序不参与导出 —— 一律按**时间线顺序**输出 sceneIds。
+ * 因此这里：勾选顺序不参与导出 —— 一律按**传入顺序**（播放页传的是本局播放顺序）输出 sceneIds。
+ *
+ * 调用方只有播放页（PlayerView）：导出对象是这一局实际生成 / 播放过的节点，
+ * 创作台不再提供导出入口。
  *
  * 为什么不用 BaseModal：这是底部抽屉（从下往上滑出的长列表），
  * BaseModal 是居中面板且高度受限，装不下时间线级别的勾选列表。
@@ -17,21 +20,20 @@ import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance
 
 import AppButton from '@/components/base/AppButton.vue'
 import GlassPanel from '@/components/base/GlassPanel.vue'
-import { isExportMockMode } from '@/services/studio'
+import { API_DEMO_MODE } from '@/services/config'
 import type { ExportSegmentData, SceneAnchor } from '@/types/studio'
 
 /**
- * 导出成品是否来自本地 Mock。
- * 后端**没有** POST /plan/export-segment 这个接口，所以接入后端后导出仍由 Mock 提供
- * （见 services/studio.ts 的 BACKEND_READY），因此不能沿用「后端已返回导出成品」这句话 ——
- * 文案必须跟着事实走。
+ * 是否处于演示模式（Mock）。
+ * 演示模式下「成品」是 services 层本地合成的静音音频，不是后端交付的，
+ * 因此不能沿用「后端已返回导出成品」这句话 —— 文案必须跟着事实走。
  * TODO: 待后端接入，当前为演示用 Mock
  */
-const demoMode = isExportMockMode
+const demoMode = API_DEMO_MODE
 
 const props = withDefaults(
   defineProps<{
-    /** 当前锚点，**按时间线顺序**传入（导出顺序与勾选展示顺序都依赖它） */
+    /** 候选节点，**按导出顺序**传入（播放页传本局的播放顺序） */
     anchors: readonly SceneAnchor[]
     /** 导出请求进行中 */
     exporting?: boolean
@@ -78,7 +80,7 @@ function clearAll(): void {
 }
 
 function handleSubmit(): void {
-  // 契约：数组顺序即导出顺序 → 一律按时间线顺序输出，不按用户点击顺序
+  // 契约：数组顺序即导出顺序 → 一律按传入顺序输出，不按用户点击顺序
   const sceneIds = props.anchors
     .filter((anchor) => selected.value.has(anchor.sceneId))
     .map((anchor) => anchor.sceneId)
@@ -128,7 +130,7 @@ onBeforeUnmount(() => {
         <header class="nw-export-drawer__head">
           <h2 class="nw-export-drawer__title">导出纯音频</h2>
           <p class="nw-export-drawer__scope">
-            勾选要拼接的场景，按时间线顺序交给后端合成一条可离线收听的音频。
+            勾选要拼接的节点，按播放顺序交给后端合成一条可离线收听的音频。
           </p>
 
           <div class="nw-export-drawer__actions">
@@ -175,7 +177,7 @@ onBeforeUnmount(() => {
           </div>
 
           <p v-if="anchors.length === 0" class="nw-export-drawer__empty">
-            还没有锚点可导出：先在上面的时间线里添加锚点。
+            还没有可导出的节点：先在播放页走过一段剧情。
           </p>
 
           <ul v-else class="nw-export-drawer__list">
@@ -188,7 +190,7 @@ onBeforeUnmount(() => {
                   @change="toggle(anchor.sceneId)"
                 />
 
-                <span class="nw-export-drawer__stage">阶段 {{ anchor.timeStage }}</span>
+                <span class="nw-export-drawer__stage">第 {{ anchor.timeStage }} 段</span>
 
                 <span class="nw-export-drawer__meta">
                   <code class="nw-export-drawer__id">{{ anchor.sceneId }}</code>

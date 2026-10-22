@@ -7,15 +7,18 @@ import cn.edu.zut.aigcgal.R.R;
 import cn.edu.zut.aigcgal.R.ResultCodeEnum;
 import cn.edu.zut.aigcgal.dao.node.PropertyNode;
 import cn.edu.zut.aigcgal.service.PropertyService;
+import org.neo4j.driver.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -74,7 +77,8 @@ public class PropertyController {
 
         PropertyNode saved = propertyService.create(mainNode);
         return R.success(Map.of(
-                "nodeId", saved.getId(),
+                // 回执给业务主键（PROP_xxxx），前端拿它调 DELETE /properties/{nodeId}
+                "nodeId", saved.getNodeId(),
                 "status", "SAVED_WITH_NATIVE_RELATIONS"
         ));
     }
@@ -84,9 +88,53 @@ public class PropertyController {
     public R<List<PropertyListItemDto>> list(@RequestParam(required = false) String type) {
         List<PropertyListItemDto> data = propertyService.list(type).stream()
                 .map(node -> new PropertyListItemDto(
-                        node.getNodeId(), node.getName(), node.getType()))
+                        node.getNodeId(), node.getName(), node.getType(),
+                        node.getDescription(), toNativeAttributes(node.getAttributes())))
                 .toList();
         return R.success(data);
+    }
+
+    /**
+     * 把 Neo4j 驱动值拆成 Java 原生类型。
+     *
+     * SDN 读回 `@CompositeProperty Map<String,Object>` 时，map 里的值仍是驱动层的 Value
+     * （BooleanValue / StringValue ...），直接交给 Jackson 会被当成 Bean 去序列化，
+     * 进而调用 ValueAdapter.isEmpty() 抛 "BOOLEAN is not iterable"，整个列表接口 500。
+     * 这里先 asObject() 摊平成 Boolean / String / Long / Double / List / Map。
+     */
+    private static Map<String, Object> toNativeAttributes(Map<String, Object> attributes) {
+        if (attributes == null) {
+            return null;
+        }
+        Map<String, Object> nativeAttributes = new LinkedHashMap<>(attributes.size());
+        attributes.forEach((key, value) -> nativeAttributes.put(
+                key, value instanceof Value neo4jValue ? neo4jValue.asObject() : value));
+        return nativeAttributes;
+    }
+
+    /** 1.4 更新图谱资源节点（按业务主键 nodeId 定位，回执与 1.1 同形） */
+    @PutMapping("/properties/{nodeId}")
+    public R<?> update(@PathVariable String nodeId, @RequestBody PropertyRequestDto req) {
+        if (req.getName() == null || req.getName().isBlank()) {
+            return R.error(ResultCodeEnum.BAD_REQUEST, "节点名称 name 不能为空");
+        }
+
+        PropertyNode patch = new PropertyNode();
+        patch.setName(req.getName().trim());
+        patch.setType(req.getType() != null ? req.getType().toUpperCase() : "CHARACTER");
+        patch.setDescription(req.getDescription() != null ? req.getDescription() : "");
+        if (req.getAttributes() != null) {
+            patch.setAttributes(req.getAttributes());
+        }
+
+        PropertyNode saved = propertyService.updateByNodeId(nodeId, patch);
+        if (saved == null) {
+            return R.error(ResultCodeEnum.NOT_FOUND, "资源不存在，可能已被删除");
+        }
+        return R.success(Map.of(
+                "nodeId", saved.getNodeId(),
+                "status", "SAVED_WITH_NATIVE_RELATIONS"
+        ));
     }
 
     /** 1.3 删除图谱资源节点（命中则删除该节点及其发出的图关系） */

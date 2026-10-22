@@ -14,7 +14,8 @@
  *   暂停即停、拖进度条即跳，不会出现字幕与音频各走各的。
  *   （页面当前**没有倍速控件**；将来加上 playbackRate 也会自动跟随，
  *     因为下标是由 currentTime 算出来的，不依赖任何计时器。）
- *   （纯聆听模式的「3 秒后自动隐藏控件」是纯 UI 计时，与字幕无关，放在组件里。）
+ *   （播放页的「沉浸模式」切换是纯 UI 状态，与字幕无关，因此放在组件里而不是这里：
+ *     它不影响任何播放语义，也不该跨页面残留。）
  *
  * 【契约没给逐句时间轴】
  *   文档给出的场景对象只有 text / speaker / audioUrl，**没有任何字幕时间戳**。
@@ -32,11 +33,8 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { ApiRequestError } from '@/services/api'
-import { getPlayScene } from '@/services/studio'
-import type { PlayEdge, PlayScene, PlaySubtitleCue } from '@/types/studio'
-
-/** 播放页的两种呈现模式 */
-export type PlayerMode = 'text' | 'listen'
+import { getPlayScene, getVoiceList } from '@/services/studio'
+import type { PlayEdge, PlayScene, PlaySubtitleCue, TimbreOption } from '@/types/studio'
 
 /**
  * 判定当前句时允许的微小提前量（秒）。
@@ -191,14 +189,10 @@ export const usePlayerStore = defineStore('player', () => {
   /** 非致命提示：分支被丢弃、缺音频、补拉失败等「能用但要说清楚」的情况 */
   const notice = ref<string | null>(null)
 
-  const mode = ref<PlayerMode>('text')
-
   /** 音频播放状态（由 <audio> 事件同步进来） */
   const playing = ref(false)
   /** 音频元数据已就绪（估算时间轴依赖时长） */
   const ready = ref(false)
-  /** 浏览器拦下了自动播放，需要用户点一下 */
-  const needsGesture = ref(false)
 
   /** 唯一时间锚点：只由 <audio> 的 timeupdate / seeked 写入 */
   const currentTime = ref(0)
@@ -222,6 +216,16 @@ export const usePlayerStore = defineStore('player', () => {
    *   一个自增信号把这两种情况都覆盖掉，语义单一、不会漏也不会重。
    */
   const reloadToken = ref(0)
+
+  /**
+   * 读档后待恢复的音频进度（秒）。
+   *
+   * 为什么不能让 store 直接 seek：store **不碰 DOM**（见文件头），
+   * 而且读到存档的那一刻 <audio> 可能还没装载新源、duration 也未知，
+   * 此时写 currentTime 会被浏览器忽略或截断。
+   * 因此这里只登记「想跳到哪」，由组件在元数据就绪后消费并清空。
+   */
+  const pendingSeek = ref<number | null>(null)
 
   /* =============================================================
    * 派生
@@ -308,6 +312,9 @@ export const usePlayerStore = defineStore('player', () => {
     // 上一个场景留下的提示在新场景里已经失效，必须清掉 ——
     // 否则「已加入队列 / 该场景没有音频地址」这类提示会一直挂在封面上（只增不减）。
     notice.value = null
+    // ⚠️ 这里**不**清 pendingSeek：它正是「刚读完档、等音频装载后要跳转」的登记项，
+    // 由 consumePendingSeek 在消费时清空。resetPlaybackState 在换场时会被调用，
+    // 若在这里清掉，读档的进度恢复永远失效。
     reloadToken.value += 1
   }
 
@@ -318,6 +325,18 @@ export const usePlayerStore = defineStore('player', () => {
     }
 
     return scene.sceneId !== '' && (scene.audioUrl !== '' || scene.text !== '')
+  }
+
+  /**
+   * 消费待恢复的进度（组件在音频元数据就绪后调用）。
+   * 返回要跳转到的秒数，并清空登记；没有待恢复进度时返回 null。
+   *
+   * 清空是必须的：否则每次换场都会把听众拽回存档时的那一秒。
+   */
+  function consumePendingSeek(): number | null {
+    const pending = pendingSeek.value
+    pendingSeek.value = null
+    return pending
   }
 
   /* =============================================================
@@ -361,8 +380,15 @@ export const usePlayerStore = defineStore('player', () => {
   /**
    * 选中一条分支。
    *
-   * 契约说 targetScene 已带全数据、无需再请求，所以这里先用嵌套数据开播；
+   * 契约说 targetScene 已带全数据，所以这里先用嵌套数据开播；
    * 又因为嵌套层的 edges 恒为空，紧接着补拉一次它的分支。
+   *
+   * ⚠️ 唯一的例外：嵌套快照里的 `audioUrl` 可能已经过期，必须重拉一次。
+   *   嵌套数据是**父场景被拉取那一刻**的快照；而锚点场景的音频是后端的惰性补录
+   *   （PlayController.backfillAudio，只在它自己被请求时才合成本条的音频）。
+   *   于是「生成时配音只覆盖新节点、锚点从不配音」的那些场景（尤其是终点锚点），
+   *   在嵌套快照里恒为空 —— 直接采信就会误判成「该场景没有音频」而卡在无声一幕。
+   *   这里按 sceneId 重拉一次，正好触发后端补录，拿回真实地址。
    *
    * 两种时机两种行为：
    *   - 当前这段已播完（或压根没在播）→ 立刻接上，听众点完就听到；
@@ -371,11 +397,11 @@ export const usePlayerStore = defineStore('player', () => {
    */
   async function openEdge(edge: PlayEdge): Promise<void> {
     // 契约类型上 targetScene 必然存在，但线上数据不保证；用运行时检查兜住
-    const target: PlayScene | null | undefined = edge.targetScene ?? null
-    // 先取出 id：一旦进了下面的兜底分支，target 已被收窄成 null | undefined
-    const fallbackId = target === null ? '' : target.sceneId.trim()
+    const nested: PlayScene | null | undefined = edge.targetScene ?? null
+    // 先取出 id：一旦进了下面的兜底分支，nested 已被收窄成 null | undefined
+    const fallbackId = nested === null ? '' : nested.sceneId.trim()
 
-    if (!isUsableScene(target)) {
+    if (!isUsableScene(nested)) {
       if (fallbackId !== '') {
         await loadScene(fallbackId)
         return
@@ -384,6 +410,9 @@ export const usePlayerStore = defineStore('player', () => {
       notice.value = '这条分支没有可用的目标场景数据。'
       return
     }
+
+    // 有台词却没音频 = 极可能是过期快照，按 sceneId 重拉（顺带触发后端补录）
+    const target = nested.audioUrl === '' ? await refetchForAudio(nested) : nested
 
     // 选了新分支 = 放弃原先的后续路径，把队列截断到当前位置再接上
     const base = playlist.value.slice(0, currentIndex.value + 1)
@@ -405,6 +434,21 @@ export const usePlayerStore = defineStore('player', () => {
     }
 
     void refreshEdges(target.sceneId, targetIndex)
+  }
+
+  /**
+   * 重拉一个场景，专门为了拿它真实的 audioUrl（顺带让后端惰性补录）。
+   *
+   * 失败时如实退回传入的快照：台词还能显示，只是没有音频 ——
+   * 与「后端不可用」时的降级口径一致，不因为补录失败就把整段剧情卡死。
+   */
+  async function refetchForAudio(scene: PlayScene): Promise<PlayScene> {
+    try {
+      return await getPlayScene(scene.sceneId)
+    } catch (cause) {
+      notice.value = `音频补录失败：${describeError(cause, '请求失败')}`
+      return scene
+    }
   }
 
   /**
@@ -452,6 +496,62 @@ export const usePlayerStore = defineStore('player', () => {
     currentTime.value = 0
     awaitingBranch.value = false
     edgesOpened.value = false
+  }
+
+  /**
+   * 从存档恢复：把播放器直接放到存档记录的那个节点上。
+   *
+   * 【为什么要重新拉一次场景，而不是只跳下标】
+   *   存档里只存了 sceneId 与世界线路径（见 SaveData），**没有存整个场景对象** ——
+   *   这是刻意的：场景数据由后端掌控，可能在此期间被改过（文案改了、音频换了），
+   *   拿存档里的旧快照播会放着过期内容。因此读档 = 按 sceneId 重新取一次当前数据。
+   *   拿不到时如实失败，不清空当前进度（调用方会提示）。
+   *
+   * 【音频进度怎么恢复】
+   *   这里只把进度写进 currentTime，真正的 seek 由组件在 audio 元数据就绪后执行
+   *   （见 PlayerView 的 restoreSeekToken watch）—— store 不碰 DOM，不知道
+   *   <audio> 什么时候 ready。
+   *
+   * @param sceneId 存档里的当前节点 id
+   * @param audioProgress 存档里的音频播放进度（秒），可选
+   * @returns 是否恢复成功
+   */
+  async function restoreFromSave(sceneId: string, audioProgress?: number): Promise<boolean> {
+    const id = sceneId.trim()
+    if (id === '') {
+      error.value = '存档里没有记录节点 id，无法读档'
+      return false
+    }
+
+    loading.value = true
+    error.value = null
+    notice.value = null
+
+    try {
+      const scene = await getPlayScene(id)
+      playlist.value = [scene]
+      currentIndex.value = 0
+      resetPlaybackState()
+
+      // 记录待恢复的进度；组件装载音频后据此 seek（自增信号，见 restoreSeekToken）
+      pendingSeek.value =
+        audioProgress !== undefined && Number.isFinite(audioProgress) && audioProgress > 0
+          ? audioProgress
+          : null
+
+      if (scene.audioUrl === '') {
+        notice.value = '该场景没有音频地址，只显示文本。'
+      }
+
+      // 进度恢复也要让组件重新装载（resetPlaybackState 已自增 reloadToken），
+      // pendingSeek 由同一个 watch 消费，无需另一个信号
+      return true
+    } catch (cause) {
+      error.value = describeError(cause, '读档失败')
+      return false
+    } finally {
+      loading.value = false
+    }
   }
 
   /** 回到队列里的上一段 */
@@ -508,12 +608,40 @@ export const usePlayerStore = defineStore('player', () => {
     playing.value = value
   }
 
-  function setNeedsGesture(value: boolean): void {
-    needsGesture.value = value
-  }
+  /* =============================================================
+   * 音色（主界面「设置」入口的音色面板）
+   * ============================================================= */
 
-  function setMode(value: PlayerMode): void {
-    mode.value = value
+  /**
+   * 音色选择（主界面「设置」入口的音色面板的数据源）。
+   *
+   * 音色是收听偏好而不是播放进度，但它只有「一份列表 + 一个选中项」，
+   * 因此放在本 store，不为它单开一个 store。
+   * 列表来自 services/studio.ts 的 getVoiceList —— ⚠️ 占位实现（契约没有音色列表接口，
+   * 当前不发请求）；后端就绪后只改 services，store 与组件不用动。
+   *
+   * 注意：**提交**音色（POST /api/v1/voices）不在这里，而是由页面调用
+   * stores/studio.ts 的 saveVoice —— 配音配置属于创作台那套契约（按 characterId 存），
+   * 复用同一个 store 才不会出现两处各写一份 voices 缓存。
+   */
+  const voiceOptions = ref<TimbreOption[]>([])
+  const voiceOptionsLoaded = ref(false)
+  const voiceOptionsError = ref<string | null>(null)
+
+  /** 加载音色列表（成功后缓存，重复打开面板不重复拉取） */
+  async function loadVoiceOptions(): Promise<void> {
+    if (voiceOptionsLoaded.value) {
+      return
+    }
+
+    voiceOptionsError.value = null
+
+    try {
+      voiceOptions.value = await getVoiceList()
+      voiceOptionsLoaded.value = true
+    } catch (cause) {
+      voiceOptionsError.value = describeError(cause, '音色列表加载失败')
+    }
   }
 
   /** 提前打开分支（不等音频播完） */
@@ -527,8 +655,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   /**
    * 离开播放页时清空，避免下次进来残留上一段的状态。
-   * 注意：**mode 也要复位** —— 否则以「纯聆听模式」离开后，下次进来仍是纯聆听，
-   * 控件会在 3 秒后自动隐藏，用户会以为界面坏了。
+   * 音色面板这类**纯界面状态**不在这里复位：它存在页面组件里，随组件卸载自然消失。
    */
   function reset(): void {
     playlist.value = []
@@ -536,8 +663,8 @@ export const usePlayerStore = defineStore('player', () => {
     loading.value = false
     error.value = null
     notice.value = null
-    needsGesture.value = false
-    mode.value = 'text'
+    // 离开页面：读档登记项必须清掉，否则下次进来会莫名其妙跳到某一秒
+    pendingSeek.value = null
     resetPlaybackState()
   }
 
@@ -548,15 +675,17 @@ export const usePlayerStore = defineStore('player', () => {
     loading,
     error,
     notice,
-    mode,
     playing,
     ready,
-    needsGesture,
     currentTime,
     duration,
     awaitingBranch,
     edgesOpened,
     reloadToken,
+    pendingSeek,
+    voiceOptions,
+    voiceOptionsLoaded,
+    voiceOptionsError,
     // 派生
     currentScene,
     edges,
@@ -578,12 +707,15 @@ export const usePlayerStore = defineStore('player', () => {
     replay,
     goPrevious,
     goNext,
+    // 存读档
+    restoreFromSave,
+    consumePendingSeek,
+    // 音色
+    loadVoiceOptions,
     // 音频事件
     syncTime,
     syncDuration,
     setPlaying,
-    setNeedsGesture,
-    setMode,
     openEdges,
     closeEdges,
     reset,

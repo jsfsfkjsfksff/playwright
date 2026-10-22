@@ -11,9 +11,12 @@
  *   2. **严格保持契约的信息量**：例如 GET /properties 按契约只回 `{ nodeId, name, type }`，
  *      这里也照做 —— 绝不偷偷把 description 补上。否则接入真实后端后
  *      「列表接口未返回描述」这类界面表现会突然变化，前端会误以为是后端出了错；
- *   3. **数据只在内存**：等价于后端的进程内存，刷新页面即回到初始状态
- *      （播放页刷新拿不到场景时由 demoScenes.ts 的兜底剧情图接管）；
- *   4. **音频一律是前端合成的静音 WAV**（见 silentAudio.ts），不播放任何真实音频。
+ *   3. **模拟后端的存储语义**：内存里的状态与 `localStorage`（键 `nw-demo-backend-v1`）
+ *      保持一致 —— 每次写操作后立即落盘，刷新页面后原样恢复，等价于「数据留在服务端」。
+ *      存储不可用（隐私模式 / 配额满）时静默降级为仅内存，不打断本次会话；
+ *      只有**未知 sceneId** 才由 demoScenes.ts 的兜底剧情图接管（那说明库里确实没有这张图）；
+ *   4. **音频一律是前端合成的静音 WAV**（见 silentAudio.ts），不播放任何真实音频，
+ *      也刻意不持久化（object URL 刷新即失效，装载时按台词长度重新合成）。
  *
  * TODO: 待后端接入，当前为演示用 Mock —— 接入后整个 services/mock 目录可以删除。
  */
@@ -35,6 +38,9 @@ import type {
   PropertyUpdateResult,
   SceneAnchor,
   SceneAnchorListData,
+  StoryEdge,
+  StoryGraphPayload,
+  StoryNode,
   VoiceConfig,
   VoiceConfigData,
 } from '@/types/studio'
@@ -54,29 +60,19 @@ interface MockPropertyRecord {
 }
 
 const properties: MockPropertyRecord[] = []
-
-/**
- * 全篇唯一的配音配置（null = 用户还没配过）。
- * 配音与资源无关：用户配的是「讲播客的这个人」的音色，所以这里不是按角色索引的字典。
- */
-let voiceConfig: VoiceConfig | null = null
-
-/**
- * 未配置时 GET /voices 返回的默认值。
- * ⚠️ 必须与后端 VoiceProfile.globalDefault() 保持一致，否则演示模式与真实后端表现不同。
- */
-const DEFAULT_VOICE: VoiceConfig = {
-  voiceName: 'zh-CN-Yunxi-Neural',
-  promptStyle: '',
-  pitch: 1,
-  rate: 1,
-}
+const voices = new Map<string, VoiceConfig>()
 
 /** 已登记的可播放场景：一键生成写进来，播放页按 sceneId 取 */
 const sceneRegistry = new Map<string, PlayScene>()
 
 /** 「一键生成」的输入锚点（由 store 在触发前同步进来） */
 let anchorSnapshot: SceneAnchor[] = []
+
+/**
+ * 画布连线（**扁平**：只有 id 引用）。
+ * 与锚点一样由 store 同步进来、并落盘 —— 提交给后端时就是 edges 这条 List。
+ */
+let edgeSnapshot: StoryEdge[] = []
 
 /** 资源 id 自增序号，形如 PROP_1001 */
 let propertySeq = 0
@@ -131,8 +127,10 @@ interface PersistedScene {
 interface PersistedState {
   propertySeq: number
   properties: MockPropertyRecord[]
-  voice: VoiceConfig | null
+  voices: VoiceConfig[]
   anchors: SceneAnchor[]
+  /** 画布连线（扁平 id 引用） */
+  edges: StoryEdge[]
   scenes: PersistedScene[]
 }
 
@@ -145,8 +143,9 @@ function persist(): void {
   const state: PersistedState = {
     propertySeq,
     properties,
-    voice: voiceConfig === null ? null : { ...voiceConfig },
+    voices: [...voices.values()],
     anchors: anchorSnapshot,
+    edges: edgeSnapshot,
     scenes: [...sceneRegistry.values()].map((scene) => ({
       sceneId: scene.sceneId,
       text: scene.text,
@@ -193,11 +192,16 @@ function restore(): void {
   if (Array.isArray(state.properties)) {
     properties.push(...state.properties)
   }
-  if (state.voice !== null && state.voice !== undefined && typeof state.voice === 'object') {
-    voiceConfig = { ...state.voice }
+  if (Array.isArray(state.voices)) {
+    for (const voice of state.voices) {
+      voices.set(voice.characterId, voice)
+    }
   }
   if (Array.isArray(state.anchors)) {
     anchorSnapshot = state.anchors.map((anchor) => ({ ...anchor }))
+  }
+  if (Array.isArray(state.edges)) {
+    edgeSnapshot = state.edges.map((edge) => ({ ...edge }))
   }
 
   // 场景分两步恢复：先建节点，再挂分支（分支里存的是目标 id）
@@ -314,34 +318,31 @@ export function mockDeleteProperty(nodeId: string): Promise<void> {
   }
 
   properties.splice(index, 1)
-  // 配音是全篇唯一配置，与资源无关：删资源不影响它，这里刻意不做任何清理
+  voices.delete(nodeId)
 
   persist()
   return respond(undefined)
 }
 
 /* =============================================================
- * 配音（全篇唯一）
+ * 配音
  * ============================================================= */
 
-/**
- * GET /api/v1/voices：全篇唯一配置。
- * 没配过时按「默认值」返回（configured = false），**不是 404** ——
- * 与真实后端一致，前端不需要为「还没配」写错误分支。
- */
-export function mockGetVoiceConfig(): Promise<VoiceConfigData> {
-  if (voiceConfig === null) {
-    return respond({ ...DEFAULT_VOICE, configured: false })
+/** GET /api/v1/voices/{characterId}：没配过就按「未配置」处理（404） */
+export function mockGetVoiceConfig(characterId: string): Promise<VoiceConfigData> {
+  const config = voices.get(characterId)
+  if (config === undefined) {
+    return respondError('该角色还没有保存过配音配置', 404)
   }
 
-  return respond({ ...voiceConfig, configured: true })
+  return respond({ ...config })
 }
 
-/** POST /api/v1/voices：全篇唯一，重复提交只覆盖同一条 */
+/** POST /api/v1/voices */
 export function mockSaveVoiceConfig(payload: VoiceConfig): Promise<VoiceConfigData> {
-  voiceConfig = { ...payload }
+  voices.set(payload.characterId, { ...payload })
   persist()
-  return respond({ ...voiceConfig, configured: true })
+  return respond({ ...payload })
 }
 
 /* =============================================================
@@ -354,10 +355,35 @@ export function setMockAnchors(anchors: readonly SceneAnchor[]): void {
   persist()
 }
 
-/** POST /api/v1/plan/anchors：回执按「保存后的锚点列表」返回 */
-export function mockSaveSceneAnchors(anchors: readonly SceneAnchor[]): Promise<SceneAnchorListData> {
-  setMockAnchors(anchors)
-  return respond(anchors.map((anchor) => ({ ...anchor })))
+/** 由 store 在连线变动时同步进来（仅演示模式使用），同时落盘 */
+export function setMockEdges(edges: readonly StoryEdge[]): void {
+  edgeSnapshot = edges.map((edge) => ({ ...edge }))
+  persist()
+}
+
+/**
+ * POST /api/v1/plan/anchors：收**扁平双 List**（nodes + edges），
+ * 回执按「保存后的节点列表」返回（与真实接口的假定一致）。
+ */
+export function mockSaveSceneAnchors(graph: StoryGraphPayload): Promise<SceneAnchorListData> {
+  setMockAnchors(graph.nodes.map(nodeToAnchor))
+  setMockEdges(graph.edges)
+  return respond(anchorSnapshot.map((anchor) => ({ ...anchor })))
+}
+
+/** 节点（扁平提交格式）→ 锚点（编辑态）；坐标与音频地址原样带过 */
+function nodeToAnchor(node: StoryNode): SceneAnchor {
+  return {
+    sceneId: node.sceneId,
+    // 卡片名称（需求 1）：创作者改过的标题要跟着双 List 一起走
+    cardName: node.cardName,
+    text: node.text,
+    speaker: node.speaker,
+    timeStage: node.timeStage,
+    audioURL: node.audioURL,
+    x: node.x,
+    y: node.y,
+  }
 }
 
 /**
@@ -367,6 +393,14 @@ export function mockSaveSceneAnchors(anchors: readonly SceneAnchor[]): Promise<S
  */
 export function mockReadAnchors(): SceneAnchorListData {
   return anchorSnapshot.map((anchor) => ({ ...anchor }))
+}
+
+/**
+ * 演示模式专用：回读假后端持有的连线（已持久化在 localStorage）。
+ * TODO: 待后端接入，当前为演示用 Mock
+ */
+export function mockReadEdges(): StoryEdge[] {
+  return edgeSnapshot.map((edge) => ({ ...edge }))
 }
 
 /** 按 timeStage 升序分组：同一组内的锚点在时间线上绝对并列 */
@@ -393,13 +427,13 @@ function excerpt(text: string): string {
   return compact.length > 14 ? `${compact.slice(0, 14)}…` : compact
 }
 
-/** 锚点 → 可播放场景（静音音频；edges 稍后按时间线关系补） */
+/** 锚点 → 可播放场景（优先用锚点自带的 audioURL，没有才合成静音音频） */
 function toPlayScene(anchor: SceneAnchor): PlayScene {
   return {
     sceneId: anchor.sceneId,
     text: anchor.text,
     speaker: anchor.speaker,
-    audioUrl: silentAudioUrlForText(anchor.text),
+    audioUrl: anchor.audioURL !== '' ? anchor.audioURL : silentAudioUrlForText(anchor.text),
     edges: [],
   }
 }
@@ -416,11 +450,24 @@ function toNestedScene(scene: PlayScene): PlayScene {
 function linkStages(from: readonly PlayScene[], to: readonly PlayScene[]): void {
   for (const scene of from) {
     scene.edges = to.map((next) => ({
-      action: `前往：${next.speaker === '' ? '旁白' : next.speaker} · ${excerpt(next.text)}`,
+      // 选项文案用「卡片名 · 台词摘要」而不是说话人：
+      // 需求 2 之后所有场景的 speaker 恒为「旁白」，拿它做标签会得到一排
+      // 「前往：旁白 · …」，认不出区别。卡片名（回退 sceneId）才是可辨认的。
+      action: `前往：${sceneLabel(next)} · ${excerpt(next.text)}`,
       condition: 'NONE',
       targetScene: toNestedScene(next),
     }))
   }
+}
+
+/**
+ * 由播放场景推一个可辨认的标签。
+ * 播放域契约（4.1）没有 cardName 字段，因此优先用「场景文本摘要」；
+ * 文本为空时退回 sceneId —— 保证选项永远有内容，不会渲染成空白按钮。
+ */
+function sceneLabel(scene: PlayScene): string {
+  const summary = excerpt(scene.text)
+  return summary === '' ? scene.sceneId : summary
 }
 
 /**
@@ -430,9 +477,11 @@ function linkStages(from: readonly PlayScene[], to: readonly PlayScene[]): void 
  *    前端按 InterpolateResultData（补全出的场景列表）假定，因此这里返回的也是锚点列表。
  *
  * 生成规则（可预测、可解释，不做随机）：
- *   1. 用户锚点按 timeStage 分组，组内并列；
- *   2. 相邻阶段之间连成分支（上一阶段每个场景 → 下一阶段全部场景）；
- *   3. 若只有一个阶段（时间线上没有下一站），按插值语义补一个 AI 续写场景，
+ *   1. **有画布连线时以连线为准**：用户在画布上点选建立的 edges 就是剧情分支，
+ *      这是「散点式编排」最直接的表达，不再按 timeStage 自动串；
+ *   2. 没画连线时退回按 timeStage 分组串联（上一阶段每个场景 → 下一阶段全部场景），
+ *      保证只填了时间线也能生成；
+ *   3. 若只有一个阶段且没有连线，按插值语义补一个 AI 续写场景，
  *      用「剧情大纲」作为它的台词 —— 这样演示时一定有点得动的分支。
  */
 export function mockInterpolatePlan(payload: InterpolateRequest): Promise<InterpolateResultData> {
@@ -441,47 +490,77 @@ export function mockInterpolatePlan(payload: InterpolateRequest): Promise<Interp
     const fallback = buildDemoScene(DEMO_ENTRY_SCENE_ID)
     sceneRegistry.set(fallback.sceneId, fallback)
     persist()
-    return respond({ scenes: [{ sceneId: fallback.sceneId, text: fallback.text, speaker: fallback.speaker, timeStage: 1 }] })
+    return respond({
+      scenes: [
+        {
+          sceneId: fallback.sceneId,
+          cardName: excerpt(fallback.text),
+          text: fallback.text,
+          speaker: fallback.speaker,
+          timeStage: 1,
+          audioURL: '',
+        },
+      ],
+    })
   }
 
   const groups = groupAnchorsByStage(anchorSnapshot)
   const stageScenes = groups.map((group) => group.map(toPlayScene))
 
-  for (let index = 0; index < stageScenes.length - 1; index += 1) {
-    linkStages(stageScenes[index], stageScenes[index + 1])
-  }
-
-  const resultAnchors: SceneAnchor[] = []
-
+  /** sceneId → 可播放场景，供连线与登记共用 */
+  const sceneById = new Map<string, PlayScene>()
   groups.forEach((group, stageIndex) => {
     group.forEach((anchor, anchorIndex) => {
-      const scene = stageScenes[stageIndex][anchorIndex]
-      // 登记进假后端，播放页才能按 sceneId 取到它
-      sceneRegistry.set(scene.sceneId, scene)
-      resultAnchors.push({ ...anchor })
+      sceneById.set(anchor.sceneId, stageScenes[stageIndex][anchorIndex])
     })
   })
 
-  if (stageScenes.length === 1) {
+  const resultAnchors: SceneAnchor[] = anchorSnapshot.map((anchor) => ({ ...anchor }))
+
+  if (edgeSnapshot.length > 0) {
+    // 以画布连线为准：source → target 各成一条分支
+    for (const edge of edgeSnapshot) {
+      const source = sceneById.get(edge.sourceId)
+      const target = sceneById.get(edge.targetId)
+      if (source === undefined || target === undefined) {
+        continue
+      }
+
+      source.edges.push({
+        action: `前往：${sceneLabel(target)} · ${excerpt(target.text)}`,
+        condition: 'NONE',
+        targetScene: toNestedScene(target),
+      })
+    }
+  } else {
+    for (let index = 0; index < stageScenes.length - 1; index += 1) {
+      linkStages(stageScenes[index], stageScenes[index + 1])
+    }
+  }
+
+  if (edgeSnapshot.length === 0 && stageScenes.length === 1) {
     const lastStage = groups[0]
     const continuationStage = lastStage[0].timeStage + 1
     const continuationId = `${stageScenes[0][0].sceneId}_AI_01`
-    const continuation = toPlayScene({
+    const continuationAnchor: SceneAnchor = {
       sceneId: continuationId,
+      cardName: excerpt(payload.outline),
       text: payload.outline,
       speaker: '旁白',
       timeStage: continuationStage,
-    })
+      audioURL: '',
+    }
+    const continuation = toPlayScene(continuationAnchor)
 
     linkStages(stageScenes[0], [continuation])
-    sceneRegistry.set(continuation.sceneId, continuation)
-    resultAnchors.push({
-      sceneId: continuationId,
-      text: continuation.text,
-      speaker: continuation.speaker,
-      timeStage: continuationStage,
-    })
+    sceneById.set(continuation.sceneId, continuation)
+    resultAnchors.push(continuationAnchor)
   }
+
+  // 全部登记进假后端，播放页才能按 sceneId 取到它
+  sceneById.forEach((scene, sceneId) => {
+    sceneRegistry.set(sceneId, scene)
+  })
 
   persist()
   return respond({ scenes: resultAnchors })

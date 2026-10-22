@@ -9,6 +9,7 @@ import math
 from typing import Any
 
 from app.domain.worldline.constraints import WorldGraphConstraints
+from app.domain.worldline.fixed_route import is_user_fixed
 
 
 def make_branch_state_signature(state: dict[str, Any]) -> tuple:
@@ -25,13 +26,66 @@ def make_branch_state_signature(state: dict[str, Any]) -> tuple:
     return (holds_sig, loc_sig, enemy_sig, flags_sig)
 
 
+def _apply_declared_actions(next_state: dict[str, Any], actions: list[dict]) -> None:
+    """无条件执行节点声明的结构化动作（只给用户固定分支用）。
+
+    用户固定分支「无条件信任」：不做角色/物品存在性、持有权、同处一地、
+    敌对关系等任何合法性判断，只把声明的状态变更落到**该分支的私有副本**上，
+    供后续 AI 剧情衔接。
+    """
+    for act in actions:
+        act_type = (act.get("actionType") or act.get("op") or "").upper()
+        actor = (act.get("actor") or act.get("from") or "").strip()
+        target = (act.get("target") or act.get("to") or "").strip()
+        item_id = (act.get("itemId") or act.get("item") or "").strip()
+
+        if act_type == "TRANSFER_ITEM":
+            actor_items = next_state["holds"].setdefault(actor, [])
+            if item_id in actor_items:
+                actor_items.remove(item_id)
+            next_state["holds"].setdefault(target, [])
+            if item_id and item_id not in next_state["holds"][target]:
+                next_state["holds"][target].append(item_id)
+
+        elif act_type == "PICK_UP":
+            next_state["holds"].setdefault(actor, [])
+            if item_id and item_id not in next_state["holds"][actor]:
+                next_state["holds"][actor].append(item_id)
+
+        elif act_type == "MOVE":
+            if actor and target:
+                next_state["locations"][actor] = target
+
+        elif act_type == "RESOLVE_HOSTILITY":
+            if (actor, target) in next_state["enemies"]:
+                next_state["enemies"].remove((actor, target))
+            if (target, actor) in next_state["enemies"]:
+                next_state["enemies"].remove((target, actor))
+
+        elif act_type in ("SET_FLAG", "SET_STATE"):
+            key = act.get("key", "")
+            if key:
+                next_state["flags"][key] = act.get("value")
+
+
 def validate_node(
     node: dict,
     current_state: dict[str, Any],
     constraints: WorldGraphConstraints,
     strict_mode: bool = True,
 ) -> tuple[bool, dict[str, Any], float]:
-    """按 4 步检查候选节点是否合法，返回 (是否合法, 演进后的分支状态, 惩罚代价)。"""
+    """按 4 步检查候选节点是否合法，返回 (是否合法, 演进后的分支状态, 惩罚代价)。
+
+    第六代补充：`action` 带 `[[USER_FIXED]]`（或节点显式标了 `userFixed`）的
+    用户固定分支**无条件判合法**，跳过所有硬约束校验，只执行其声明的状态变更。
+    """
+    # --- 0. 用户固定分支：信任用户，跳过全部合法性检查 ---
+    if node.get("userFixed") is True or is_user_fixed(node.get("action")):
+        next_state = copy.deepcopy(current_state)
+        _apply_declared_actions(next_state, node.get("structuredActions", []))
+        next_state["tension"] = float(node.get("tension", current_state.get("tension", 5)))
+        return True, next_state, 0.0
+
     text_and_act = f"{node.get('text', '')} {node.get('action', '')}"
     penalty = 0.0
 

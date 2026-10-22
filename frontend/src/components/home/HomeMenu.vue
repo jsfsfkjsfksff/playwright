@@ -11,6 +11,8 @@
  *   3. 已有对应页面的项渲染为 <RouterLink> 真实跳转，页面尚未开发的项渲染为
  *      <button> 并只播报提示 —— 参考稿 app.js 对四个入口一律 preventDefault +
  *      toast，本项目里「创作台」「资源」两个页面已经存在，没有理由不接上真实路由；
+ *      「设置」没有独立页面，但它是音色选择的宿主（见下），因此点击后向上抛
+ *      `settings` 事件，同样不制造无效跳转；
  *   4. 参考稿的 ↑↓ 键导航保留，并补上 Home / End；参考稿里那条
  *      「焦点在 body 时按 Enter 激活选中项」依赖全局状态、容易与页面其它控件
  *      冲突，且 <RouterLink> 本身支持 Enter 激活，故不再移植。
@@ -24,12 +26,18 @@ import type { HomeMenuItem } from '@/types/home'
 const emit = defineEmits<{
   /** 播报一条提示（用于尚未开发的入口） */
   feedback: [message: string]
+  /** 打开设置面板（音色选择）—— 设置没有独立页面，由 HomeView 就地弹面板 */
+  settings: []
 }>()
+
+/** 「设置」项的稳定 id：它不跳页，而是就地打开音色面板 */
+const SETTINGS_ITEM_ID = 'settings'
 
 /**
  * 四条菜单项。跳转目标一律引用 ROUTE_NAMES，不写死路径字符串。
  * 「开始新故事」进入创作台（/studio）；「我的故事库」进入资源页。
- * 教程 / 设置：项目目前没有对应页面，只给 feedback，不制造无效跳转。
+ * 教程：项目目前没有对应页面，只给 feedback，不制造无效跳转。
+ * 设置：无独立页面，但承载音色选择 —— 见 select() 的分支。
  */
 const MENU_ITEMS: readonly HomeMenuItem[] = [
   {
@@ -65,7 +73,6 @@ const MENU_ITEMS: readonly HomeMenuItem[] = [
       'M4.6 16.3l2-1.1',
       'M17.4 8.8l2-1.1',
     ],
-    feedback: '设置 · 页面开发中',
   },
 ]
 
@@ -88,6 +95,12 @@ const NAV_KEYS: readonly string[] = ['ArrowDown', 'ArrowUp', 'Home', 'End']
 
 function select(item: HomeMenuItem): void {
   activeId.value = item.id
+
+  // 设置：就地打开音色面板（音色选择已按需求从播放页移到这里）
+  if (item.id === SETTINGS_ITEM_ID) {
+    emit('settings')
+    return
+  }
 
   // 有真实目标时交给 <RouterLink> 处理跳转，这里只更新选中态
   if (item.feedback !== undefined) {

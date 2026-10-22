@@ -7,44 +7,122 @@
  *   2. 顶栏：返回故事选择（左）+ 标题（中）
  *   3. 工具栏：说明 + 新增锚点 / 保存锚点
  *   4. 时间线：按 timeStage 分组渲染 TimelineStage（相同阶段并排）
- *   5. 底部固定栏：返回选择页 / 导出纯音频 / 一键生成（插值）
+ *   5. 底部固定栏：返回选择页 / 一键生成（插值）
  *
  * 契约要点（接口文档 v1.0）：
  *   - `timeStage` 是数字坐标：越小越靠前，**相同即并列**（并排渲染）；
- *   - POST /plan/anchors 保存锚点；POST /plan/interpolate 触发 AI 插值；
- *     POST /plan/export-segment 导出拼接好的纯音频。
+ *   - POST /plan/anchors 保存锚点；POST /plan/interpolate 触发 AI 插值。
+ *     导出纯音频已移到播放页（勾选实际生成 / 播放过的节点）。
  *
  * ⚠️ 契约缺口（已在界面如实写出，不假装具备）：
  *   1. 没有「查询锚点」接口 → 真实后端模式下无法回读锚点，刷新即丢；
  *      演示模式由假后端持久化进 localStorage，因此刷新后时间线仍在；
  *   2. 插值接口没有进度通道 → 生成过程只表示「已提交、等待返回」；
- *   3. 插值返回体未定义 → 跳转播放页时优先用返回的补全场景，拿不到就退回用户选的起始场景。
+ *   3. 插值返回体未定义 → 跳转播放页时优先用返回的补全场景，拿不到就退回自动推导出的起始场景。
  *
- * 演示模式（Mock）：本页三项动作（保存锚点 / 一键生成 / 导出）都由 services 层的假后端接管，
+ * 演示模式（Mock）：本页两项动作（保存锚点 / 一键生成）都由 services 层的假后端接管，
  * 因此「一键生成 → 跳播放页」这条链路在未接后端时也能真跑通（音频是静音占位）。
- * 具体是不是演示模式由 services 层判定，本页只负责如实提示（DemoModeBadge）。
+ * 按需求，页面不再挂「演示模式」提示条：数据从哪来是内部实现，不该占据创作界面。
  * TODO: 待后端接入，当前为演示用 Mock。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppButton from '@/components/base/AppButton.vue'
 import BackLink from '@/components/base/BackLink.vue'
-import DemoModeBadge from '@/components/base/DemoModeBadge.vue'
 import GlassPanel from '@/components/base/GlassPanel.vue'
+import LoadingTransition from '@/components/base/LoadingTransition.vue'
 import PageBackdrop from '@/components/base/PageBackdrop.vue'
 import PageHeader from '@/components/base/PageHeader.vue'
 import ToastPill from '@/components/base/ToastPill.vue'
-import ExportDrawer from '@/components/feature/ExportDrawer.vue'
 import InterpolateModal from '@/components/feature/InterpolateModal.vue'
+import StoryCanvas from '@/components/feature/StoryCanvas.vue'
 import TimelineStage from '@/components/feature/TimelineStage.vue'
 import { ROUTE_NAMES } from '@/router/routes'
 import { useStudioStore } from '@/stores/studio'
-import type { InterpolateRequest, SceneAnchor, SceneAnchorPatch } from '@/types/studio'
+import type {
+  InterpolateRequest,
+  InterpolateResultData,
+  SceneAnchor,
+  SceneAnchorPatch,
+} from '@/types/studio'
 import { NARRATOR_SPEAKER } from '@/utils/studioVocabulary'
 
 const router = useRouter()
 const studio = useStudioStore()
+
+/* =============================================================
+ * 视图切换（列表 / 画布）
+ * ============================================================= */
+
+type OperationView = 'list' | 'canvas'
+
+const VIEW_OPTIONS: readonly { value: OperationView; label: string }[] = [
+  { value: 'list', label: '列表' },
+  { value: 'canvas', label: '画布' },
+]
+
+/**
+ * 默认进列表：它是精确编辑入口（台词 / 说话人 / 音频 / 阶段都能改）。
+ * 画布负责「结构」——挪位置、连线、看整体拓扑。
+ */
+const activeView = ref<OperationView>('list')
+
+/** 画布上当前选中的节点（连线第一端） */
+const selectedSceneId = ref<string | null>(null)
+
+/** 切到画布前先把坐标补齐，否则所有节点会叠在 (0,0) */
+function selectView(view: OperationView): void {
+  if (view === 'canvas') {
+    studio.ensureAnchorPositions()
+    activeView.value = 'canvas'
+    return
+  }
+
+  activeView.value = 'list'
+  selectedSceneId.value = null
+}
+
+/* =============================================================
+ * 画布事件
+ * ============================================================= */
+
+function handleConnect(sourceId: string, targetId: string): void {
+  if (studio.addEdge(sourceId, targetId)) {
+    notify(`已连线：${sourceId} → ${targetId}`)
+    return
+  }
+
+  notify(studio.lastError ?? '连线失败')
+}
+
+function handleRemoveEdge(edgeId: string): void {
+  studio.removeEdge(edgeId)
+  notify(`已删除连线 ${edgeId}`)
+}
+
+/**
+ * 卡片的显示名 = sceneId：标题就是提交给后端的标识，提示条里也用它，
+ * 用户看到的和实际提交的是同一个字符串。
+ */
+function anchorDisplayName(sceneId: string): string {
+  return sceneId
+}
+
+/**
+ * 双击画布卡片：切回列表视图并滚动到对应卡片。
+ * 画布负责结构，精修仍在列表里进行 —— 避免两套编辑态打架。
+ */
+function focusAnchor(sceneId: string): void {
+  activeView.value = 'list'
+  selectedSceneId.value = null
+
+  void nextTick(() => {
+    const target = document.querySelector(`[data-scene-id="${CSS.escape(sceneId)}"]`)
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    notify(`已定位到 ${anchorDisplayName(sceneId)}`)
+  })
+}
 
 /** 生成条件：至少 2 个锚点（与故事选择页的判定保持一致） */
 const MIN_ANCHORS = 2
@@ -53,17 +131,16 @@ const canGenerate = computed(() => studio.anchorCount >= MIN_ANCHORS)
 
 const pendingHint = computed(() => `还差：剧情锚点 ${studio.anchorCount}/${MIN_ANCHORS}`)
 
-/** 按时间线顺序排列的锚点：导出顺序、说话人默认值等都依赖它 */
+/** 按时间线顺序排列的锚点：说话人默认值、画布与列表的呈现顺序都依赖它 */
 const orderedAnchors = computed(() =>
   studio.anchorGroups.flatMap((group) => group.anchors),
 )
 
 /* =============================================================
- * 弹窗与抽屉
+ * 弹窗
  * ============================================================= */
 
 const interpolateOpen = ref(false)
-const exportOpen = ref(false)
 
 /**
  * 打开面板前先清掉上一次操作的失败原因。
@@ -73,11 +150,6 @@ const exportOpen = ref(false)
 function openInterpolate(): void {
   studio.clearError()
   interpolateOpen.value = true
-}
-
-function openExport(): void {
-  studio.clearError()
-  exportOpen.value = true
 }
 
 /** 正在被拖拽的锚点 id（拖拽期间卡片降透明度、阶段行高亮） */
@@ -112,6 +184,7 @@ function notify(message: string): void {
 /** 本地 sceneId 计数；契约里 sceneId 由创作者定义，这里先给一个可辨认的默认值 */
 let localAnchorSeq = 0
 
+/** 生成不重复的 sceneId（同时用作新卡片的默认名称序号） */
 function nextSceneId(): string {
   let candidate = ''
 
@@ -133,15 +206,24 @@ function nextTimeStage(): number {
 }
 
 function addAnchorAt(timeStage: number): void {
+  const sceneId = nextSceneId()
+
   const anchor: SceneAnchor = {
-    sceneId: nextSceneId(),
+    sceneId,
+    // 卡片标题就是场景 id：新建时先给占位 id（SCENE_ANCHOR_xx），
+    // 用户点标题旁的按钮填写自己的名字；填写后不可再改。
+    cardName: sceneId,
     text: '',
+    // 需求 2：已移除说话人概念，统一「旁白讲述」。
+    // 数据层仍提交该字段以兼容后端 Scene 实体（见 types/studio.ts 的 SceneAnchor.speaker）。
     speaker: NARRATOR_SPEAKER,
     timeStage,
+    // 新锚点还没有音频：空串表示「未生成」，与「已生成但地址为空」区分不开也不该区分
+    audioURL: '',
   }
 
   if (studio.addAnchor(anchor)) {
-    notify(`已新增锚点 ${anchor.sceneId}（阶段 ${timeStage}）`)
+    notify(`已新增锚点 ${sceneId}（阶段 ${timeStage}）`)
     return
   }
 
@@ -155,8 +237,10 @@ function updateAnchor(sceneId: string, patch: SceneAnchorPatch): void {
 }
 
 function removeAnchor(sceneId: string): void {
+  // 名字要在删除前取，删完就查不到了
+  const name = anchorDisplayName(sceneId)
   studio.removeAnchor(sceneId)
-  notify(`已删除锚点 ${sceneId}`)
+  notify(`已删除锚点 ${name}`)
 }
 
 /** 拖拽落点：把锚点移到目标阶段 */
@@ -168,14 +252,14 @@ function moveAnchorToStage(sceneId: string, timeStage: number): void {
   }
 
   if (studio.updateAnchor(sceneId, { timeStage })) {
-    notify(`${sceneId} 已移到阶段 ${timeStage}`)
+    notify(`${anchorDisplayName(sceneId)} 已移到阶段 ${timeStage}`)
   }
 
   draggingSceneId.value = null
 }
 
 /* =============================================================
- * 保存 / 生成 / 导出
+ * 保存 / 生成
  * ============================================================= */
 
 async function handleSaveAnchors(): Promise<void> {
@@ -183,34 +267,68 @@ async function handleSaveAnchors(): Promise<void> {
   notify(ok ? '锚点已提交后端' : (studio.lastError ?? '锚点保存失败'))
 }
 
+/**
+ * 生成过场动画的最短展示时长（毫秒）。
+ * 请求可能 200ms 就回来了，但一瞬间的遮罩只会「闪一下」；
+ * 用 2.5s 保证过场走完整段流光，再进播放页。
+ */
+const TRANSITION_MIN_MS = 2500
+
+/** 是否正在展示「生成剧情」的全屏过场 */
+const generatingTransition = ref(false)
+
+/** 等待指定毫秒（只用于把过场补足最小时长） */
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
+/**
+ * 从 /plan/interpolate 的回执里读「新生成场景的 sceneId 列表」。
+ *
+ * 后端当前实现回的是 `startScene.getId()` —— 一个**数字**（没有场景列表），
+ * 因此这里做形状判断：只有确实是 `{ scenes: [...] }` 时才取 sceneId，其余返回空数组，
+ * 由调用方退回请求里的 startSceneId。契约未定义该字段，两种形状都认。
+ */
+function readGeneratedSceneIds(result: InterpolateResultData): string[] {
+  const scenes = typeof result === 'object' && result !== null ? result.scenes : undefined
+  if (!Array.isArray(scenes)) {
+    return []
+  }
+  return scenes.map((scene) => scene.sceneId).filter((sceneId) => sceneId !== '')
+}
+
 async function handleInterpolate(payload: InterpolateRequest): Promise<void> {
+  // 1. 立刻盖上全屏过场 —— 用户点完就该看到反馈，而不是盯着参数弹窗等请求
+  generatingTransition.value = true
+  const startedAt = Date.now()
+
   const result = await studio.triggerInterpolate(payload)
 
+  // 2. 请求再快也让过场至少走满 TRANSITION_MIN_MS
+  const elapsed = Date.now() - startedAt
+  if (elapsed < TRANSITION_MIN_MS) {
+    await wait(TRANSITION_MIN_MS - elapsed)
+  }
+
   if (result === null) {
+    // 失败：收掉过场。参数弹窗仍开着（错误显示在里面），可以直接改参数重试
+    generatingTransition.value = false
     notify(studio.lastError ?? 'AI 插值生成失败')
     return
   }
 
   interpolateOpen.value = false
 
-  // 契约未定义返回体：能拿到补全场景就用第一个（时间线上最早的新场景），
-  // 拿不到就退回用户选的起始场景 —— 不猜、也不假装后端给了什么。
-  const scenes = Array.isArray(result.scenes) ? result.scenes : []
-  const targetSceneId = scenes[0]?.sceneId ?? payload.startSceneId
+  // 后端当前回的是 data=数字（起点场景的 Neo4j 内部 id），拿不到补全场景列表，
+  // 因此统一走 readGeneratedSceneIds：能读到 sceneId 就用，读不到退回请求里的 startSceneId
+  // —— 不猜、也不假装后端给了什么。
+  const targetSceneId = readGeneratedSceneIds(result)[0] ?? payload.startSceneId
 
-  notify(`生成完成，进入播放：${targetSceneId}`)
-  void router.push({ name: ROUTE_NAMES.player, params: { sceneId: targetSceneId } })
-}
-
-async function handleExport(sceneIds: string[]): Promise<void> {
-  const result = await studio.exportSegment(sceneIds)
-
-  if (result === null) {
-    notify(studio.lastError ?? '片段导出失败')
-    return
-  }
-
-  notify('导出完成，成品地址见抽屉')
+  // 3. 先跳转、再收过场：新页面已经挂上，遮罩揭开时不会闪回操作页
+  await router.push({ name: ROUTE_NAMES.player, params: { sceneId: targetSceneId } })
+  generatingTransition.value = false
 }
 
 /* =============================================================
@@ -218,8 +336,6 @@ async function handleExport(sceneIds: string[]): Promise<void> {
  * ============================================================= */
 
 onMounted(() => {
-  // 说话人下拉的数据来源是资源页的角色；直接进本页时资源列表可能还没加载
-  void studio.loadResources()
   // ⚠️ 契约没有查询锚点的接口：这里只是把 store 里本次会话的锚点读回来，不做服务端同步
   void studio.fetchAnchors()
 })
@@ -246,7 +362,8 @@ onBeforeUnmount(() => {
       <div class="nw-studio-operations__toolbar">
         <p class="nw-studio-operations__scope">
           不同阶段按时间从上到下排列；<strong>同一阶段内的锚点在时间线上并列</strong>，横向并排。
-          拖动卡片手柄可改变阶段，也可以直接改卡片里的阶段数字。
+          拖动卡片手柄可改变阶段，也可以直接改卡片里的阶段数字；
+          <strong>场景 id 在卡片标题处填写，填写后不可修改</strong>。
         </p>
 
         <div class="nw-studio-operations__tools">
@@ -266,13 +383,34 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 演示模式提示 + 契约缺口说明 -->
-      <DemoModeBadge hint="Mock 数据：锚点保存在浏览器本地；生成后进入播放页" />
-
+      <!--
+        契约缺口说明：只在真实后端模式下显示（演示模式不再挂任何提示条）。
+        这里的文字是给创作者的**操作前提**，不是内部实现细节：
+        「保存锚点」会真的提交给后端，刷新后读不回来。
+      -->
       <p v-if="!studio.demoMode" class="nw-studio-operations__persistence">
         契约没有「查询锚点」接口：锚点无法从服务端回读；
         「保存锚点」会通过 POST /plan/anchors 提交给后端。
       </p>
+
+      <!-- 视图切换：列表（精确编辑） / 画布（散点编排 + 连线） -->
+      <div class="nw-studio-operations__views" role="tablist" aria-label="编排视图">
+        <button
+          v-for="option in VIEW_OPTIONS"
+          :key="option.value"
+          type="button"
+          role="tab"
+          class="nw-studio-operations__view"
+          :class="{ 'nw-studio-operations__view--active': activeView === option.value }"
+          :aria-selected="activeView === option.value"
+          @click="selectView(option.value)"
+        >
+          {{ option.label }}
+          <span v-if="option.value === 'canvas'" class="nw-studio-operations__view-count">
+            {{ studio.anchorCount }} 点 / {{ studio.edgeCount }} 线
+          </span>
+        </button>
+      </div>
 
       <!-- 时间线 -->
       <div v-if="studio.anchorCount === 0" class="nw-studio-operations__empty">
@@ -287,13 +425,12 @@ onBeforeUnmount(() => {
         </GlassPanel>
       </div>
 
-      <div v-else class="nw-studio-operations__timeline">
+      <div v-else-if="activeView === 'list'" class="nw-studio-operations__timeline">
         <TimelineStage
           v-for="group in studio.anchorGroups"
           :key="group.timeStage"
           :time-stage="group.timeStage"
           :anchors="group.anchors"
-          :characters="studio.characters"
           :dragging-scene-id="draggingSceneId"
           @update-anchor="updateAnchor"
           @remove-anchor="removeAnchor"
@@ -303,6 +440,27 @@ onBeforeUnmount(() => {
           @drag-end="draggingSceneId = null"
         />
       </div>
+
+      <!--
+        画布视图：散点式编排。
+        点集 = 锚点（坐标写在锚点里，拖动即回写），边集 = 独立的 edges 数组，
+        提交时由 store 的 storyGraph 组装成扁平双 List。
+      -->
+      <StoryCanvas
+        v-else
+        :anchors="studio.anchors"
+        :edges="studio.edges"
+        :selected-id="selectedSceneId"
+        @select="selectedSceneId = $event"
+        @edit="focusAnchor"
+        @connect="handleConnect"
+        @move="studio.updateAnchorPosition"
+        @remove-edge="handleRemoveEdge"
+      >
+        <template #empty-action>
+          <AppButton size="md" variant="primary" @click="addAnchorAt(1)">添加第一个锚点</AppButton>
+        </template>
+      </StoryCanvas>
     </div>
 
     <!-- 底部固定操作栏 -->
@@ -314,15 +472,6 @@ onBeforeUnmount(() => {
       <div class="nw-studio-operations__footer-actions">
         <AppButton size="md" variant="secondary" @click="router.push({ name: ROUTE_NAMES.studio })">
           返回选择页
-        </AppButton>
-
-        <AppButton
-          size="md"
-          variant="secondary"
-          :disabled="studio.anchorCount === 0"
-          @click="openExport"
-        >
-          导出纯音频
         </AppButton>
 
         <AppButton
@@ -339,21 +488,18 @@ onBeforeUnmount(() => {
     <InterpolateModal
       v-if="interpolateOpen"
       :anchors="orderedAnchors"
+      :edges="studio.edges"
       :generating="studio.generating"
       :error="studio.lastError"
       @submit="handleInterpolate"
       @close="interpolateOpen = false"
     />
 
-    <ExportDrawer
-      v-if="exportOpen"
-      :anchors="orderedAnchors"
-      :exporting="studio.exporting"
-      :result="studio.exportResult"
-      :error="studio.lastError"
-      @submit="handleExport"
-      @close="exportOpen = false"
-    />
+    <!--
+      全屏生成过场：提交后立刻盖上，请求完成且动画走满 2.5s 后跳播放页。
+      组件内部 Teleport 到 body 并 fixed 铺满（z-index 9999），因此放在模板哪一层都一样。
+    -->
+    <LoadingTransition v-if="generatingTransition" />
 
     <ToastPill :visible="toastVisible" :message="toastMessage" />
   </div>
@@ -437,6 +583,54 @@ onBeforeUnmount(() => {
   color: var(--nw-color-warning);
   font-size: var(--nw-font-size-sm);
   line-height: var(--nw-line-height-normal);
+}
+
+/* ---------- 视图切换（列表 / 画布） ---------- */
+.nw-studio-operations__views {
+  display: flex;
+  gap: var(--nw-space-2xs);
+  padding: 3px;
+  border: var(--nw-border-width) solid var(--nw-color-glass-edge);
+  border-radius: var(--nw-radius-pill);
+  background-color: var(--nw-color-glass-fill);
+  align-self: flex-start;
+}
+
+.nw-studio-operations__view {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nw-space-2xs);
+  padding: 0.35rem 1.1rem;
+  border: 0;
+  border-radius: var(--nw-radius-pill);
+  background-color: transparent;
+  color: var(--nw-color-text-secondary);
+  font-size: var(--nw-font-size-sm);
+  letter-spacing: var(--nw-letter-spacing-wide);
+  cursor: pointer;
+  transition:
+    background-color var(--nw-duration-fast) var(--nw-ease-out),
+    color var(--nw-duration-fast) var(--nw-ease-out);
+}
+
+.nw-studio-operations__view:hover {
+  color: var(--nw-color-text-primary);
+}
+
+.nw-studio-operations__view:focus-visible {
+  outline: var(--nw-border-width-strong) solid var(--nw-color-focus);
+  outline-offset: 2px;
+}
+
+.nw-studio-operations__view--active {
+  background-color: var(--nw-color-accent-hover);
+  color: var(--nw-color-accent-contrast);
+  box-shadow: var(--nw-shadow-inset-top);
+}
+
+.nw-studio-operations__view-count {
+  color: var(--nw-color-text-tertiary);
+  font-size: var(--nw-font-size-xs);
 }
 
 /* ---------- 时间线 ---------- */

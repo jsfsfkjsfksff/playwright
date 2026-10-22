@@ -13,7 +13,8 @@ from app.infra.tts import dashscope as dsp
 from app.infra.tts.dashscope import DashScopeTTSProvider
 
 AUDIO_URL = "https://cdn.invalid/a.mp3"
-API_PATH = "/services/aigc/multimodal-generation/generation"
+MODEL = "qwen-audio-3.1-tts-flash"
+API_PATH = "/services/audio/tts/SpeechSynthesizer"
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +28,7 @@ def provider(tmp_path):
     return DashScopeTTSProvider(
         api_key="key",
         base_url="https://dashscope.invalid",
-        model="qwen-tts",
+        model=MODEL,
         output_dir=tmp_path,
         timeout=5.0,
     )
@@ -43,7 +44,8 @@ def _response(status_code: int = 200, payload: dict | None = None, content: byte
 
 
 def _audio_payload(**output_overrides) -> dict:
-    output = {"audio_url": AUDIO_URL, "duration_ms": 1500}
+    """官方非流式响应形状：output.audio.url（有效期 24 小时）。"""
+    output = {"audio": {"url": AUDIO_URL}}
     output.update(output_overrides)
     return {"output": output}
 
@@ -60,11 +62,18 @@ async def test_synthesize_success(provider, patch_httpx, tmp_path):
     assert post.call_args.args[0] == f"https://dashscope.invalid{API_PATH}"
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer key"
     payload = post.call_args.kwargs["json"]
-    assert payload["model"] == "qwen-tts"
+    assert payload["model"] == MODEL
+    # 音色/语速/音调/格式都在 input 里，不是 parameters
     assert payload["input"]["text"] == "各位听众"
-    assert payload["parameters"]["voice"] == "zh-CN-xiaoxiao"
+    assert payload["input"]["voice"] == "longanhuan_v3.1"
+    assert payload["input"]["format"] == "mp3"
+    assert payload["input"]["rate"] == 1.0
+    assert payload["input"]["pitch"] == 1.0
+    assert "instruction" not in payload["input"]
+    assert "parameters" not in payload
 
-    assert result.durationMs == 1500
+    # 官方非流式响应不返回时长 → 走估算（4 字 × 250ms）
+    assert result.durationMs == 4 * 250
     assert result.format == "mp3"
     assert result.audioUrl.startswith("static/audio/")
     assert result.audioUrl.endswith(".mp3")
@@ -75,24 +84,27 @@ async def test_synthesize_success(provider, patch_httpx, tmp_path):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key", ["audio_url", "audioUrl", "url"])
-async def test_audio_url_field_variants(provider, patch_httpx, key):
-    _, post, get = patch_httpx
-    post.return_value = _response(payload={"output": {key: AUDIO_URL}})
-    get.return_value = _response(content=b"audio")
+async def test_flat_url_is_not_accepted(provider, patch_httpx, monkeypatch):
+    """只认官方形状 output.audio.url；平铺的 output.url 不再被兼容。"""
+    monkeypatch.setattr(dsp.settings, "llm_max_retries", 1)
+    _, post, _ = patch_httpx
+    post.return_value = _response(payload={"output": {"url": AUDIO_URL}})
 
-    result = await provider.synthesize(TTSInput(text="各位听众"))
-    assert result.audioUrl.startswith("static/audio/")
+    with pytest.raises(TTSFailedException) as info:
+        await provider.synthesize(TTSInput(text="各位听众"))
+    assert "未返回音频 URL" in info.value.message
 
 
 @pytest.mark.anyio
-async def test_duration_is_estimated_when_missing(provider, patch_httpx):
+async def test_instruction_is_sent_when_provided(provider, patch_httpx):
+    """配音域的 promptStyle 通过 instruction 下发给 TTS（方言/情感/角色）。"""
     _, post, get = patch_httpx
-    post.return_value = _response(payload={"output": {"audio_url": AUDIO_URL}})
+    post.return_value = _response(payload=_audio_payload())
     get.return_value = _response(content=b"audio")
 
-    result = await provider.synthesize(TTSInput(text="四个汉字"))
-    assert result.durationMs == 4 * 250
+    await provider.synthesize(TTSInput(text="各位听众", instruction="语气低沉、语速偏慢"))
+
+    assert post.call_args.kwargs["json"]["input"]["instruction"] == "语气低沉、语速偏慢"
 
 
 @pytest.mark.anyio
@@ -120,6 +132,19 @@ async def test_http_error_status_raises_with_body(provider, patch_httpx, monkeyp
 
 
 @pytest.mark.anyio
+async def test_4xx_is_not_retried(provider, patch_httpx, monkeypatch):
+    """音色名/模型名写错会返回 4xx，重试只是白花钱。"""
+    monkeypatch.setattr(dsp.settings, "llm_max_retries", 3)
+    _, post, _ = patch_httpx
+    post.return_value = _response(status_code=400, payload={"message": "voice not found"})
+
+    with pytest.raises(TTSFailedException) as info:
+        await provider.synthesize(TTSInput(text="各位听众", voice="不存在的音色"))
+    assert info.value.details["status"] == 400
+    assert post.await_count == 1
+
+
+@pytest.mark.anyio
 async def test_post_timeout_is_not_retried(provider, patch_httpx):
     _, post, _ = patch_httpx
     post.side_effect = httpx.TimeoutException("too slow")
@@ -137,7 +162,7 @@ async def test_transport_error_is_retried_then_succeeds(provider, patch_httpx):
     get.return_value = _response(content=b"audio")
 
     result = await provider.synthesize(TTSInput(text="各位听众"))
-    assert result.durationMs == 1500
+    assert result.durationMs == 4 * 250
     assert post.await_count == 2
 
 
@@ -178,7 +203,7 @@ async def test_missing_config_raises_before_request(
     defaults = {
         "api_key": "key",
         "base_url": "https://dashscope.invalid",
-        "model": "qwen-tts",
+        "model": MODEL,
         "output_dir": tmp_path,
     }
     defaults.update(kwargs)
@@ -224,7 +249,7 @@ def test_output_dir_is_created_on_init(tmp_path):
     DashScopeTTSProvider(
         api_key="key",
         base_url="https://dashscope.invalid",
-        model="qwen-tts",
+        model=MODEL,
         output_dir=target,
     )
     assert target.is_dir()
@@ -262,7 +287,7 @@ async def test_wav_bytes_get_wav_suffix(provider, patch_httpx):
 async def test_format_falls_back_to_url_suffix(provider, patch_httpx):
     """字节认不出来时，用下载地址的后缀兜底。"""
     _, post, get = patch_httpx
-    post.return_value = _response(payload={"output": {"audio_url": "https://cdn.invalid/b.wav"}})
+    post.return_value = _response(payload={"output": {"audio": {"url": "https://cdn.invalid/b.wav"}}})
     get.return_value = _response(content=b"unknown-bytes")
 
     result = await provider.synthesize(TTSInput(text="各位听众", format="mp3"))
@@ -271,22 +296,13 @@ async def test_format_falls_back_to_url_suffix(provider, patch_httpx):
 
 
 @pytest.mark.anyio
-async def test_pitch_is_forwarded_when_set(provider, patch_httpx):
+async def test_pitch_is_forwarded_in_input(provider, patch_httpx):
+    """音调是 [0.5, 2.0] 的倍数，和 rate 一样放在 input 里下发。"""
     _, post, get = patch_httpx
     post.return_value = _response(payload=_audio_payload())
     get.return_value = _response(content=b"ID3-bytes")
 
-    await provider.synthesize(TTSInput(text="各位听众", pitch=-2.0))
+    await provider.synthesize(TTSInput(text="各位听众", pitch=0.8))
 
-    assert post.call_args.kwargs["json"]["parameters"]["pitch"] == -2.0
-
-
-@pytest.mark.anyio
-async def test_pitch_is_absent_when_not_set(provider, patch_httpx):
-    _, post, get = patch_httpx
-    post.return_value = _response(payload=_audio_payload())
-    get.return_value = _response(content=b"ID3-bytes")
-
-    await provider.synthesize(TTSInput(text="各位听众"))
-
-    assert "pitch" not in post.call_args.kwargs["json"]["parameters"]
+    assert post.call_args.kwargs["json"]["input"]["pitch"] == 0.8
+    assert "parameters" not in post.call_args.kwargs["json"]

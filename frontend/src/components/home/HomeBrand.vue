@@ -46,7 +46,7 @@
       </svg>
     </span>
 
-    <h1 class="nw-home-brand__title">Podcast Engine</h1>
+    <h1 class="nw-home-brand__title">TaleTrellis</h1>
   </header>
 </template>
 

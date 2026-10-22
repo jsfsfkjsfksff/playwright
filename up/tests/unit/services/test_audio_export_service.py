@@ -29,9 +29,13 @@ def test_export_writes_relative_path_under_static(service, tmp_path, mp3_kit):
     assert result.url == f"static/exports/{result.filename}"
     assert not result.url.startswith("/")
     assert result.segments == 2
-    assert result.sizeBytes == 5 * mp3_kit.frame_size
-    assert result.durationMs == int(5 * mp3_kit.frame_ms)
-    assert (tmp_path / "exports" / result.filename).read_bytes() == mp3_kit.frames(5)
+    # 段与段之间会插入静音间隔，所以体积/时长都比纯首尾相接更大
+    assert result.sizeBytes > 5 * mp3_kit.frame_size
+    assert result.durationMs > int(5 * mp3_kit.frame_ms)
+
+    exported = (tmp_path / "exports" / result.filename).read_bytes()
+    assert exported.startswith(mp3_kit.frames(2))
+    assert exported.endswith(mp3_kit.frames(3))
 
 
 def test_absolute_url_with_static_path_is_accepted(service, tmp_path, mp3_kit):

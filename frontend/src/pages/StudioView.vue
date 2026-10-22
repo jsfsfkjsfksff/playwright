@@ -7,13 +7,11 @@
  *   2. 主体：标题「选择故事」+ 两张并排入口卡片（资源添加 / 操作编辑）
  *   3. 底部：就绪状态提示 + 「返回标题」与「一键生成」
  *
- * 底部动作（本次修正）：
- *   以前这里放的是「一键生成」，点了却只是跳去操作编辑页，还附一条随页面卸载而
- *   根本看不见的提示 —— 按钮文案与真实行为不符。现在改为「开始编排」，就是一次
- *   明确的导航；真正的生成按钮在「操作编辑」页底部（起始场景 / 必经场景 / 大纲等
- *   参数都在那里）。
- *   下方的就绪提示仍会告诉用户离「可以生成」还差什么，但它不再拦入口 ——
- *   锚点正是在操作编辑页里添加的，用「锚点不足」拦入口会让人永远加不上锚点。
+ * 底部动作（本轮需求）：
+ *   已移除「开始编排」按钮 —— 进入子页的入口是上面两张卡片，底部不需要第二个去向。
+ *   现在底部只有一个主动作「返回标题」，并按需求把它做成视觉焦点：
+ *   体量升到 xl、玻璃填充换成更实的强调色渐变、外发光 + 极低频呼吸。下方仍保留
+ *   就绪状态提示，告诉用户离「可以生成」还差什么（它不拦入口，锚点正是在操作页里加的）。
  *
  * 卡片造型（本次调整）：两张**左右对称的圆角矩形玻璃卡**，做成「实体画框」——
  *   玻璃材质复用 base/GlassPanel（半透明底 + 毛玻璃），本页额外加上
@@ -58,7 +56,7 @@ const STORY_ENTRIES: readonly StoryEntry[] = [
   {
     id: 'resources',
     title: '资源添加',
-    summary: '登记角色 / 规则 / 实体，并为角色配置音色',
+    summary: '登记角色 / 规则 / 实体（音色在播放页选择）',
     routeName: ROUTE_NAMES.studioResources,
     iconPaths: [
       'M12 3.6 3.6 7.9 12 12.2l8.4-4.3z',
@@ -121,21 +119,13 @@ const pendingHint = computed(() => {
  * 操作
  * ============================================================= */
 
+/**
+ * 返回主界面。
+ * 本页底部现在只有一个动作：需求已移除「开始编排」按钮，
+ * 视觉焦点统一让给「返回标题」—— 进入编排的入口在两张卡片上（点卡片即进子页）。
+ */
 function goHome(): void {
   void router.push({ name: ROUTE_NAMES.home })
-}
-
-/**
- * 进入编排。
- * 这一页只做「总览 + 分流」：真正的插值生成需要填起始场景 / 必经场景 / 大纲等参数，
- * 表单和生成按钮都在「操作编辑」页，所以这里就是一次纯导航。
- *
- * 注意（本次修正）：这里**不做任何条件校验**。以前会在条件不满足时置灰，
- * 但锚点正是在「操作编辑」页里添加的 —— 用「锚点不足」拦住入口，
- * 用户就永远加不上锚点。就绪状态改由页面下方的提示承担。
- */
-function goToOperations(): void {
-  void router.push({ name: ROUTE_NAMES.studioOperations })
 }
 
 onMounted(() => {
@@ -180,7 +170,7 @@ onMounted(() => {
         </li>
       </ul>
 
-      <!-- 3. 底部：就绪状态 + 两个动作 -->
+      <!-- 3. 底部：就绪状态 + 唯一动作「返回标题」 -->
       <div class="nw-studio-select__actions">
         <!-- 演示模式提示：本页链路不请求后端，数据只在内存里 -->
         <DemoModeBadge hint="Mock 数据：全链路不请求后端，音频为静音占位" />
@@ -194,11 +184,13 @@ onMounted(() => {
           {{ canGenerate ? '已满足生成条件' : pendingHint }}
         </p>
 
+        <!--
+          需求：移除「开始编排」。进入子页的入口是上面两张卡片，
+          因此这里只留一个主动作 —— 「返回标题」升为视觉焦点（见 __back 样式）。
+        -->
         <div class="nw-studio-select__buttons">
-          <AppButton size="lg" variant="secondary" @click="goHome">返回标题</AppButton>
-
-          <AppButton size="lg" variant="primary" notched @click="goToOperations">
-            开始编排
+          <AppButton class="nw-studio-select__back" size="xl" variant="primary" notched @click="goHome">
+            返回标题
           </AppButton>
         </div>
       </div>
@@ -474,6 +466,68 @@ onMounted(() => {
 }
 
 /*
+ * 唯一主动作「返回标题」：需求要求它成为视觉焦点。
+ * 手段只有三个，且都用令牌，不写死颜色：
+ *   1. 体量——按钮升到 xl，并给一个更大的最小宽度，视觉上压住整块底部；
+ *   2. 材质——把玻璃填充换成更实的强调色渐变（accent-hover 叠加 surface-elevated），
+ *      比默认 primary 的不透明度更高，在深色背景上更"跳"；
+ *   3. 光——外发光 + 呼吸动画（8 秒一轮，幅度很小，符合「低频」要求）。
+ * 悬停时发光增强并轻微上浮；按下回落到原位。
+ */
+.nw-studio-select__back :deep(.nw-app-button__text) {
+  letter-spacing: var(--nw-letter-spacing-wide);
+}
+
+.nw-studio-select__back {
+  min-width: min(18rem, 80vw);
+  border-radius: var(--nw-radius-md);
+  background-image: linear-gradient(
+    180deg,
+    var(--nw-color-accent-hover),
+    var(--nw-color-surface-elevated)
+  );
+  box-shadow:
+    0 0 0 1px var(--nw-color-accent-strong) inset,
+    var(--nw-glow-accent),
+    0 10px 30px var(--nw-color-page-bg);
+  animation: nw-studio-back-breathe 8s var(--nw-ease-in-out) infinite;
+  transition:
+    transform var(--nw-duration-base) var(--nw-ease-out),
+    box-shadow var(--nw-duration-base) var(--nw-ease-out);
+}
+
+.nw-studio-select__back:hover,
+.nw-studio-select__back:focus-visible {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 1px var(--nw-color-accent-contrast) inset,
+    var(--nw-glow-accent),
+    0 0 34px var(--nw-color-focus-ring),
+    0 14px 34px var(--nw-color-page-bg);
+}
+
+.nw-studio-select__back:active {
+  transform: translateY(0);
+}
+
+@keyframes nw-studio-back-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px var(--nw-color-accent-strong) inset,
+      var(--nw-glow-accent-soft),
+      0 10px 30px var(--nw-color-page-bg);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px var(--nw-color-accent-strong) inset,
+      var(--nw-glow-accent),
+      0 10px 30px var(--nw-color-page-bg);
+  }
+}
+
+/*
  * 不支持 backdrop-filter 时的兜底由 GlassPanel 自己处理
  * （.nw-glass-panel--strong 会换成不透明底色），这里不再重复一份。
  */
@@ -504,9 +558,21 @@ onMounted(() => {
     transition: none;
   }
 
+  /* 「返回标题」的呼吸灯在减弱动效时停掉，只保留静态发光 */
+  .nw-studio-select__back {
+    animation: none;
+    transition: none;
+  }
+
   .nw-studio-select__card:hover,
   .nw-studio-select__card:focus-visible,
   .nw-studio-select__card:active {
+    transform: none;
+  }
+
+  .nw-studio-select__back:hover,
+  .nw-studio-select__back:focus-visible,
+  .nw-studio-select__back:active {
     transform: none;
   }
 }

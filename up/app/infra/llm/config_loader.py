@@ -40,6 +40,12 @@ def load_providers(path: Path | None = None) -> dict[str, ProviderConfig]:
 
         env_name = cfg.get("api_key_env")
         api_key = os.getenv(env_name) if env_name else None
+        if not api_key and env_name:
+            # .env 只会被 pydantic 读进 Settings，**不会写进 os.environ**。
+            # 因此环境变量里没有时，回落到 Settings 的同名小写字段
+            # （例如 ALIYUN_MAAS_API_KEY -> settings.aliyun_maas_api_key），
+            # 这样只靠 .env 就能启动，不必在终端里再 export 一遍。
+            api_key = getattr(settings, env_name.lower(), None) or None
         if not api_key:
             # 缺 key 直接跳过，不阻塞其它 provider
             continue

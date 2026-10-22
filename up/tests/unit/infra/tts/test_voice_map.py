@@ -7,7 +7,7 @@ import yaml
 
 from app.core.config import settings
 from app.core.exceptions import ConfigException
-from app.infra.tts.voice_map import load_voice_map
+from app.infra.tts.voice_map import TIMBRE_ALIASES, load_voice_map, resolve_timbre_alias
 
 
 def _write(tmp_path: Path, data: object) -> Path:
@@ -21,7 +21,7 @@ def test_speaker_gets_its_own_voice(tmp_path):
         tmp_path,
         {
             "default": {"voice": "zh-CN-xiaoxiao", "rate": 1.0},
-            "speakers": {"少女": {"voice": "zh-CN-xiaoyi", "rate": 1.1, "pitch": -2.5}},
+            "speakers": {"少女": {"voice": "zh-CN-xiaoyi", "rate": 1.1, "pitch": 0.8}},
         },
     )
 
@@ -29,7 +29,7 @@ def test_speaker_gets_its_own_voice(tmp_path):
 
     assert spec.voice == "zh-CN-xiaoyi"
     assert spec.rate == 1.1
-    assert spec.pitch == -2.5
+    assert spec.pitch == 0.8
 
 
 @pytest.mark.parametrize("speaker", [None, "", "   ", "没配过的角色"])
@@ -45,9 +45,9 @@ def test_unknown_speaker_falls_back_to_default(tmp_path, speaker):
     assert load_voice_map(path).resolve(speaker).voice == "zh-CN-xiaoxiao"
 
 
-def test_pitch_is_none_when_not_configured(tmp_path):
+def test_pitch_defaults_to_original_when_not_configured(tmp_path):
     path = _write(tmp_path, {"speakers": {"少女": {"voice": "zh-CN-xiaoyi"}}})
-    assert load_voice_map(path).resolve("少女").pitch is None
+    assert load_voice_map(path).resolve("少女").pitch == 1.0
 
 
 def test_missing_file_degrades_to_global_defaults(tmp_path):
@@ -80,3 +80,19 @@ def test_invalid_shape_raises_config_error(tmp_path, data):
 
     with pytest.raises(ConfigException):
         load_voice_map(path)
+
+
+@pytest.mark.parametrize("timbre", sorted(TIMBRE_ALIASES))
+def test_timbre_id_translates_to_engine_voice(timbre):
+    """回归：前端稳定标识必须翻译成百炼真实音色名，否则 400。"""
+    assert resolve_timbre_alias(timbre) == TIMBRE_ALIASES[timbre]
+
+
+def test_timbre_id_tolerates_surrounding_spaces():
+    assert resolve_timbre_alias("  elder-warm  ") == TIMBRE_ALIASES["elder-warm"]
+
+
+@pytest.mark.parametrize("voice", ["longanhuan_v3.1", "没收录的音色", None, ""])
+def test_unmapped_voice_passes_through(voice):
+    """直接传真实音色名也要能用（否则没法绕过映射做实验）。"""
+    assert resolve_timbre_alias(voice) == voice

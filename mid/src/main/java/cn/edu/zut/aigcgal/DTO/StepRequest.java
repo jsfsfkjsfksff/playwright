@@ -29,4 +29,10 @@ public class StepRequest {
 
     // 【新增】：有序的必经节点 sceneId 列表，例如 ["KEY_1", "KEY_2", "KEY_3"]
     private List<String> mandatorySceneIds;
+
+    /**
+     * 前端画布的单向连线。
+     * 用户固定分支的 action 里带 [[USER_FIXED]] 标记；双向边对已在前端收敛，不会出现在这里。
+     */
+    private List<TransitionDto> transitions;
 }

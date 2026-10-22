@@ -26,7 +26,7 @@
  *      统一负责解析偏好并写入根元素标识；当前解析恒定为夜间，
  *      接入日间时只需启用解析，并在本文件把占位改成真实取值。
  * 3. 夜间专属效果已被单独封装，接入日间时按需覆盖即可，不会无条件生效：
- *      - `.nw-glass`（styles/theme.css）：深色玻璃材质基类
+ *      - `.nw-glass-panel`（components/base/GlassPanel.vue）：深色玻璃材质
  *      - `.nw-page-backdrop`（components/base/PageBackdrop.vue）：统一背景图与压暗层
  *      - `.nw-audio-orb`（components/audio/AudioOrb.vue）：球体辉光
  *
@@ -41,8 +41,12 @@
 
 [data-theme='day'] body {
   /*
-   * 以下 96 项与 themes/night.css 完全同名同序，
+   * 以下 76 项与 themes/night.css 完全同名同序，
    * 取值统一为 inherit（= 夜间取值），因此当前切换到 day 也不会有任何视觉变化。
+   *
+   * 历史：清单里原有环形音波（--nw-wave-*，9 项）与功能入口面板（--nw-panel-*，11 项）
+   * 两组令牌，它们唯一的消费方 AudioWave.vue / FeaturePanel.vue 随废弃页面删除，
+   * 两侧（night / day）同步移除，避免留下没人引用的「僵尸令牌」。
    */
   --nw-palette-ink: inherit;
   --nw-palette-accent: inherit;
@@ -114,26 +118,6 @@
   --nw-spectrum-3: inherit;
   --nw-spectrum-core: inherit;
   --nw-spectrum-axis: inherit;
-  --nw-wave-core: inherit;
-  --nw-wave-core-mid: inherit;
-  --nw-wave-ring: inherit;
-  --nw-wave-ring-soft: inherit;
-  --nw-wave-bar-1: inherit;
-  --nw-wave-bar-2: inherit;
-  --nw-wave-bar-3: inherit;
-  --nw-wave-bar-axis: inherit;
-  --nw-wave-node: inherit;
-  --nw-panel-fill-top: inherit;
-  --nw-panel-fill-bottom: inherit;
-  --nw-panel-fill-hover-top: inherit;
-  --nw-panel-fill-hover-bottom: inherit;
-  --nw-panel-rim: inherit;
-  --nw-panel-rim-hover: inherit;
-  --nw-panel-sheen: inherit;
-  --nw-panel-inner-glow: inherit;
-  --nw-panel-fallback: inherit;
-  --nw-panel-label: inherit;
-  --nw-panel-label-hover: inherit;
   --nw-shadow-md: inherit;
   --nw-shadow-inset-top: inherit;
   --nw-shadow-panel: inherit;

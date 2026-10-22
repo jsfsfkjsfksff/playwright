@@ -6,12 +6,13 @@
  * 页面结构：
  *   1. 背景层 PageBackdrop（站内统一背景图，与其它内页一致）
  *   2. 顶栏：返回故事选择（左）+ 标题（中）
- *   3. 主体：工具栏（接入状态 + 全篇配音 + 新增资源）与按类型分组的资源卡片
+ *   3. 主体：工具栏（接入状态 + 新增资源）与按类型分组的资源卡片
  *   4. 底部固定栏：返回选择页
  *
  * 数据流：卡片抛事件 → 本页调用 stores/studio.ts → store 调用 services 层。
- * 数据来自真实后端还是演示（Mock）假数据由 services 层决定，本页只负责展示，
- * 并把「演示模式」这件事如实告诉用户（见 DemoModeBadge）。
+ * 数据来自真实后端还是演示（Mock）假数据由 services 层决定，本页只负责展示 ——
+ * 数据源属于内部实现，界面上不再挂「演示模式」提示条。
+ * 配音配置入口已从本页移除（配置弹窗组件保留，供其它入口复用）。
  * 「一键生成」不在这里 —— 它需要同时看资源与锚点的数量，因此放在故事选择页。
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
@@ -19,16 +20,14 @@ import { useRouter } from 'vue-router'
 
 import AppButton from '@/components/base/AppButton.vue'
 import BackLink from '@/components/base/BackLink.vue'
-import DemoModeBadge from '@/components/base/DemoModeBadge.vue'
 import PageBackdrop from '@/components/base/PageBackdrop.vue'
 import PageHeader from '@/components/base/PageHeader.vue'
 import ToastPill from '@/components/base/ToastPill.vue'
 import AddResourceModal from '@/components/feature/AddResourceModal.vue'
 import ResourceCard from '@/components/feature/ResourceCard.vue'
-import VoiceConfigModal from '@/components/feature/VoiceConfigModal.vue'
 import { ROUTE_NAMES } from '@/router/routes'
 import { useStudioStore } from '@/stores/studio'
-import type { PropertyCreatePayload, PropertyResponse, VoiceConfig } from '@/types/studio'
+import type { PropertyCreatePayload, PropertyResponse } from '@/types/studio'
 import { propertyTypeLabel } from '@/utils/studioVocabulary'
 
 const router = useRouter()
@@ -38,8 +37,8 @@ const studio = useStudioStore()
  * 弹窗
  * ============================================================= */
 
-/** 同一时刻只允许一个弹窗 */
-type StudioModal = 'none' | 'resource' | 'voice'
+/** 同一时刻只允许一个弹窗（配音配置入口已移除，只剩资源新增 / 编辑） */
+type StudioModal = 'none' | 'resource'
 
 const activeModal = ref<StudioModal>('none')
 const editingResource = ref<PropertyResponse | null>(null)
@@ -52,15 +51,6 @@ function openCreateResource(): void {
 function openEditResource(resource: PropertyResponse): void {
   editingResource.value = resource
   activeModal.value = 'resource'
-}
-
-/**
- * 打开全篇配音弹窗（不针对任何资源）。
- * 先拉一次当前配置用于回填：后端在「从未配置」时也返回默认值，不会报错。
- */
-async function openVoiceConfig(): Promise<void> {
-  await studio.loadVoice()
-  activeModal.value = 'voice'
 }
 
 function closeModal(): void {
@@ -113,17 +103,6 @@ async function handleRemoveResource(resource: PropertyResponse): Promise<void> {
   notify(ok ? `已删除：${resource.name}` : (studio.lastError ?? '删除失败'))
 }
 
-async function handleVoiceSubmit(config: VoiceConfig): Promise<void> {
-  const ok = await studio.saveVoice(config)
-  if (!ok) {
-    notify(studio.lastError ?? '配音配置保存失败')
-    return
-  }
-
-  notify('配音配置已保存')
-  closeModal()
-}
-
 function goBackToSelect(): void {
   void router.push({ name: ROUTE_NAMES.studio })
 }
@@ -131,8 +110,6 @@ function goBackToSelect(): void {
 onMounted(() => {
   // loadResources 内部已捕获错误并写入 lastError，不会抛出未处理的拒绝
   void studio.loadResources()
-  // 配音状态用于工具栏按钮文案（全篇唯一配置，一次 GET 就够）
-  void studio.loadVoice()
 })
 
 onBeforeUnmount(() => {
@@ -154,8 +131,7 @@ onBeforeUnmount(() => {
         <span class="nw-studio-resources__top-spacer" aria-hidden="true" />
       </header>
 
-      <!-- 演示模式提示：数据保存在浏览器本地，不走后端 -->
-      <DemoModeBadge hint="Mock 数据：资源保存在浏览器本地，不请求后端" />
+      <!-- 演示模式提示条已按需求移除：数据源属于内部实现，不占创作界面 -->
 
       <!-- 工具栏 -->
       <div class="nw-studio-resources__toolbar">
@@ -170,10 +146,6 @@ onBeforeUnmount(() => {
           {{ studio.lastError }}
         </p>
         <span v-else class="nw-studio-resources__notice" />
-
-        <AppButton size="md" variant="secondary" @click="openVoiceConfig">
-          {{ studio.voiceConfigured ? '全篇配音' : '配置配音' }}
-        </AppButton>
 
         <AppButton size="md" variant="primary" @click="openCreateResource">新增资源</AppButton>
       </div>
@@ -208,20 +180,12 @@ onBeforeUnmount(() => {
       <AppButton size="md" variant="secondary" @click="goBackToSelect">返回选择页</AppButton>
     </footer>
 
-    <!-- 弹窗：同一时刻只挂载一个 -->
+    <!-- 弹窗：同一时刻只挂载一个（配音配置弹窗已随入口一起移除，组件文件保留） -->
     <AddResourceModal
       v-if="activeModal === 'resource'"
       :initial="editingResource"
       :saving="studio.saving"
       @submit="handleResourceSubmit"
-      @close="closeModal"
-    />
-
-    <VoiceConfigModal
-      v-if="activeModal === 'voice'"
-      :initial="studio.voice"
-      :saving="studio.saving"
-      @submit="handleVoiceSubmit"
       @close="closeModal"
     />
 

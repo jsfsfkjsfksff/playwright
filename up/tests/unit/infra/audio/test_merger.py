@@ -61,9 +61,25 @@ def test_mp3_duration_is_zero_when_unparsable():
 
 
 def test_merge_concatenates_segments_in_order(mp3_kit):
-    merged = merge_mp3_segments([mp3_kit.frames(1), mp3_kit.frames(2)])
+    merged = merge_mp3_segments([mp3_kit.frames(1), mp3_kit.frames(2)], gap_ms=0)
     assert merged == mp3_kit.frames(3)
     assert mp3_duration_ms(merged) == int(3 * mp3_kit.frame_ms)
+
+
+def test_merge_inserts_silence_between_segments(mp3_kit):
+    merged = merge_mp3_segments([mp3_kit.frames(1), mp3_kit.frames(2)], gap_ms=200)
+
+    assert merged.startswith(mp3_kit.frames(1))
+    assert merged.endswith(mp3_kit.frames(2))
+    gap_ms = mp3_duration_ms(merged) - int(3 * mp3_kit.frame_ms)
+    # 静音帧按整帧取整，允许一帧以内的误差
+    assert abs(gap_ms - 200) <= mp3_kit.frame_ms
+
+
+def test_merge_default_gap_is_audible(mp3_kit):
+    merged = merge_mp3_segments([mp3_kit.frames(1), mp3_kit.frames(1)])
+    gap_ms = mp3_duration_ms(merged) - int(2 * mp3_kit.frame_ms)
+    assert gap_ms >= 700
 
 
 def test_merge_drops_intermediate_tags(mp3_kit):
@@ -71,7 +87,8 @@ def test_merge_drops_intermediate_tags(mp3_kit):
         [
             mp3_kit.id3v2(b"z" * 30) + mp3_kit.frames(1),
             mp3_kit.frames(1) + mp3_kit.id3v1(),
-        ]
+        ],
+        gap_ms=0,
     )
     assert merged == mp3_kit.frames(2)
 

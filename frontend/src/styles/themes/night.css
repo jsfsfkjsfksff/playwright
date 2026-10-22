@@ -10,8 +10,8 @@
  *   2. 本文件只声明**语义化主题令牌**，不含任何页面构图、组件尺寸与定位。
  *   3. 日间模式接入方式见同目录 day.css：为同名令牌补充取值即可，
  *      不需要改动页面结构、组件与交互逻辑。
- *   4. 夜间专属的玻璃材质与光晕（.nw-glass、环境光晕层）在各自样式中单独
- *      封装并标注，日间模式可按需覆盖，不会无条件作用于浅色背景。
+ *   4. 夜间专属的玻璃材质与光晕由各组件自带（例如 GlassPanel 的 .nw-glass-panel），
+ *      日间模式可按需覆盖，不会无条件作用于浅色背景。
  */
 
 :root {
@@ -129,32 +129,6 @@
   --nw-spectrum-3: rgb(159 208 247 / 88%);
   --nw-spectrum-core: rgb(228 242 255 / 100%);
   --nw-spectrum-axis: rgb(207 232 255 / 14%);
-
-  /* ---------- 环形音波（AudioWave，功能选择页中央主体） ----------
-   * 与首页频谱（--nw-spectrum-*）区分：这里是圆周环绕的声纹柱体与同心波纹，
-   * 不透明度量级更低，保证主体清晰但不过曝。 */
-  --nw-wave-core: rgb(16 38 70 / 16%);
-  --nw-wave-core-mid: rgb(24 56 100 / 9%);
-  --nw-wave-ring: rgb(154 200 242 / 20%);
-  --nw-wave-ring-soft: rgb(154 200 242 / 9%);
-  --nw-wave-bar-1: rgb(90 162 232 / 80%);
-  --nw-wave-bar-2: rgb(159 208 247 / 90%);
-  --nw-wave-bar-3: rgb(228 242 255 / 96%);
-  --nw-wave-bar-axis: rgb(214 236 255 / 88%);
-  --nw-wave-node: rgb(220 239 255 / 72%);
-
-  /* ---------- 功能入口面板（FeaturePanel：资源 / 创作） ---------- */
-  --nw-panel-fill-top: rgb(30 56 100 / 72%);
-  --nw-panel-fill-bottom: rgb(11 24 46 / 86%);
-  --nw-panel-fill-hover-top: rgb(42 74 126 / 84%);
-  --nw-panel-fill-hover-bottom: rgb(15 32 60 / 92%);
-  --nw-panel-rim: rgb(148 194 242 / 34%);
-  --nw-panel-rim-hover: rgb(182 218 252 / 62%);
-  --nw-panel-sheen: rgb(190 224 255 / 10%);
-  --nw-panel-inner-glow: rgb(120 178 240 / 20%);
-  --nw-panel-fallback: rgb(11 22 44 / 94%);
-  --nw-panel-label: var(--nw-color-text-primary);
-  --nw-panel-label-hover: var(--nw-color-accent-contrast);
 
   /* ---------- 阴影与光效 ---------- */
   --nw-shadow-md: 0 10px 30px rgb(2 6 14 / 52%);

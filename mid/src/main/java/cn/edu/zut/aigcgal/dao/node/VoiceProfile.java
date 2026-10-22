@@ -20,16 +20,16 @@ public class VoiceProfile {
     @GeneratedValue
     private Long id;
 
-    // TTS 音色名，如 zh-CN-Yunxi-Neural
+    // TTS 音色名，取值见百炼「Qwen-Audio-TTS 音色列表」（如 longanhuan_v3.1）
     private String voiceName;
 
     // 风格提示词，如「语气低沉、疲惫、带有一点不耐烦，语速偏慢」
     private String promptStyle;
 
-    // 音调偏移（半音，允许负数）
+    // 音调倍数（合法区间 [0.5, 2.0]，1.0 为原调）——不是半音偏移，别填负数
     private Double pitch;
 
-    // 语速倍率（必须大于 0）
+    // 语速倍数（合法区间 [0.5, 2.0]）
     private Double rate;
 
     /**
@@ -43,7 +43,7 @@ public class VoiceProfile {
     /** 从未配置过时对外返回的默认值（与前端 mock 的 DEFAULT_VOICE 保持一致） */
     public static VoiceProfile globalDefault() {
         VoiceProfile profile = new VoiceProfile();
-        profile.setVoiceName("zh-CN-Yunxi-Neural");
+        profile.setVoiceName("longanhuan_v3.1");
         profile.setPromptStyle("");
         profile.setPitch(1.0);
         profile.setRate(1.0);

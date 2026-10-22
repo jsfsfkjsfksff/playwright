@@ -2,6 +2,11 @@
 
 每个分支维护独立的 state_after，按 (sceneId, state_sig) 展开状态空间，
 再用逆向动态规划 (Backward Induction) 剪掉死胡同、选出高分路径。
+
+第六代补充：
+  - 用户固定段（`[[USER_FIXED]]`）在 DP 之后**强制保留**，不允许被剪枝删除；
+  - 固定段与主干外的可选固定分支都不额外加分（铁律一：固定不等于最优）；
+  - 主干外的固定分支只保留为可选路线，不强制进入起点 → 终点的必经链（铁律三）。
 """
 
 import json
@@ -9,8 +14,34 @@ import math
 from typing import Any
 
 from app.domain.worldline.constraints import WorldGraphConstraints
+from app.domain.worldline.fixed_route import FixedSegment
 from app.domain.worldline.models import TrellisGraphResponse, WorldlineEdge, WorldlineNode
 from app.domain.worldline.validator import make_branch_state_signature, validate_node
+
+
+def _force_edge(
+    best_physical_edges: dict[tuple[str, str], tuple[float, WorldlineEdge]],
+    segment: FixedSegment,
+) -> None:
+    """把固定段写进结果边集。
+
+    已存在同一条物理边时只替换 action（补上 `[[USER_FIXED]]` 标记），
+    分数沿用 DP 算出来的值 —— 固定分支不因「固定」而获得额外加分。
+    """
+    pair = (segment.fromSceneId, segment.toSceneId)
+    existing = best_physical_edges.get(pair)
+    condition = existing[1].condition if existing is not None else "NONE"
+    score = existing[0] if existing is not None else 0.0
+
+    best_physical_edges[pair] = (
+        score,
+        WorldlineEdge(
+            fromSceneId=segment.fromSceneId,
+            toSceneId=segment.toSceneId,
+            action=segment.marked_action,
+            condition=condition,
+        ),
+    )
 
 
 def solve_story_trellis(
@@ -18,6 +49,8 @@ def solve_story_trellis(
     target_pre: dict[str, Any],
     unified_layers: list[list[dict]],
     strict_mode: bool = True,
+    fixed_segments: tuple[FixedSegment, ...] = (),
+    optional_fixed_segments: tuple[FixedSegment, ...] = (),
 ) -> TrellisGraphResponse:
     """按 (sceneId, state_sig) 展开状态空间，执行正向校验与逆向 DP 剪枝。"""
     node_map: dict[str, dict] = {}
@@ -119,6 +152,32 @@ def solve_story_trellis(
                     alive_scene_ids.add(uid)
             else:
                 V[u_key] = -math.inf
+
+    # --- 阶段 C：用户固定剧情强制保留（第六代） ---
+    # 固定段是用户亲手写的剧情，DP 只能优化 AI 部分，不能把固定段剪掉。
+    # 注意：这里只是「保留」，不提高它的分数 —— 固定不等于最优。
+    known_ids = set(node_map) | {"START", "END"}
+
+    for segment in fixed_segments:
+        if segment.fromSceneId not in known_ids or segment.toSceneId not in known_ids:
+            continue
+        _force_edge(best_physical_edges, segment)
+
+    # 主干之外的固定分支：原样保留为可选平行路线（端点由 Java 端从库里解析）
+    for segment in optional_fixed_segments:
+        _force_edge(best_physical_edges, segment)
+
+    # 固定段的锚点即使被 DP 判成死胡同，也要保留节点，否则会留下悬空边
+    forced_ids = {
+        scene_id
+        for segment in fixed_segments
+        for scene_id in (segment.fromSceneId, segment.toSceneId)
+    }
+    alive_scene_ids.update(
+        scene_id
+        for scene_id in forced_ids
+        if scene_id in node_map and scene_id != "START" and scene_id != "END"
+    )
 
     sorted_edges = [
         item[1] for item in sorted(best_physical_edges.values(), key=lambda x: x[0], reverse=True)

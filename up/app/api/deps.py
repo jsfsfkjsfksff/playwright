@@ -32,8 +32,8 @@ def get_audio_export_service() -> AudioExportService:
 
 @lru_cache(maxsize=1)
 def get_worldline_service() -> WorldlineService:
-    """世界线生成后会逐条合成语音，复用同一个 TTS 服务（连带它的连接池）。"""
-    return WorldlineService(llm=get_llm_gateway(), tts=get_tts_service())
+    """世界线只出文本；节点音频由 Java 侧调 /api/ai/tts 回填。"""
+    return WorldlineService(llm=get_llm_gateway())
 
 
 async def shutdown_services() -> None:

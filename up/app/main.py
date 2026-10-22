@@ -10,7 +10,7 @@ from app.api.deps import (
     get_llm_gateway,
     shutdown_services,
 )
-from app.api.v1 import audio, generate
+from app.api.v1 import audio, generate, tts
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import AppException
@@ -117,6 +117,8 @@ app.include_router(api_router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/ai", tags=["generate"])
 # 契约：Java 的 export 包固定按 /api/audio/export 调用
 app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
+# Java 的 PythonTtsClient 固定按 /api/ai/tts 调用
+app.include_router(tts.router, prefix="/api/ai", tags=["tts"])
 
 
 # ---------- 静态资源 ----------

@@ -26,11 +26,33 @@ public class PropertyService {
      */
     //dto只能在controller层使用，service层使用实体类
     public PropertyNode create(PropertyNode node) {
+        // 新建时补发业务主键（已有 nodeId 的走更新路径，不重新发号）
+        if (node.getNodeId() == null || node.getNodeId().isBlank()) {
+            node.setNodeId(nextNodeId());
+        }
         return propertyRepository.save(node);
     }
 
     public Optional<PropertyNode> selectByName(String name) {
         return propertyRepository.findByName(name);
+    }
+
+    /**
+     * 按业务主键 nodeId 更新资源节点；返回 null 表示目标不存在。
+     * 只覆盖请求带来的字段，未传的保持原值，图关系不动。
+     */
+    public PropertyNode updateByNodeId(String nodeId, PropertyNode source) {
+        PropertyNode node = propertyRepository.findByNodeId(nodeId);
+        if (node == null) {
+            return null;
+        }
+        node.setName(source.getName());
+        node.setType(source.getType());
+        node.setDescription(source.getDescription());
+        if (source.getAttributes() != null) {
+            node.setAttributes(source.getAttributes());
+        }
+        return propertyRepository.save(node);
     }
 
     /**

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import audio, generate
+from app.api.v1 import audio, generate, tts
 
 api_router = APIRouter()
 
@@ -8,5 +8,6 @@ api_router = APIRouter()
 api_router.include_router(generate.router, prefix="/ai", tags=["generate"])
 api_router.include_router(audio.router, prefix="/audio", tags=["audio"])
 
+api_router.include_router(tts.router, prefix="/ai", tags=["tts"])
 # from app.api.v1 import cleaned
 # api_router.include_router(cleaned.router, tags=["cleaned"])

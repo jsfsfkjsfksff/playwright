@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -23,6 +23,20 @@ logger = get_logger(__name__)
 _STATIC_URL_PREFIX = "static"
 # 认得出来的音频容器，用于把落盘文件的后缀写对
 _KNOWN_FORMATS = {"mp3", "wav", "pcm", "ogg", "m4a", "aac", "flac"}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """是否值得重试。
+
+    4xx（429 限流除外）说明请求本身有问题——音色名不存在、模型名不对、鉴权失败、
+    参数越界——重试只会白花钱，还拖慢排查。
+    """
+    if isinstance(exc, httpx.HTTPError):
+        return True
+    if isinstance(exc, TTSFailedException):
+        status = exc.details.get("status")
+        return not (isinstance(status, int) and 400 <= status < 500 and status != 429)
+    return False
 
 
 class DashScopeTTSProvider:
@@ -113,7 +127,7 @@ class DashScopeTTSProvider:
         @retry(
             stop=stop_after_attempt(settings.llm_max_retries),
             wait=wait_exponential(min=1, max=8),
-            retry=retry_if_exception_type((TTSFailedException, httpx.HTTPError)),
+            retry=retry_if_exception(_is_retryable),
             reraise=True,
         )
         async def _inner() -> AudioResult:
@@ -126,19 +140,22 @@ class DashScopeTTSProvider:
         base_url = self._require_base_url()
         model = self._require_model()
 
-        url = f"{base_url.rstrip('/')}/services/aigc/multimodal-generation/generation"
+        url = f"{base_url.rstrip('/')}/services/audio/tts/SpeechSynthesizer"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        payload: dict[str, Any] = {
-            "model": model,
-            "input": {"text": req.text},
-            "parameters": {"voice": req.voice, "rate": req.rate},
+        # 音色 / 语速 / 音调 / 格式都放在 input 里（不是 parameters）——见 Qwen-Audio-TTS 文档
+        tts_input: dict[str, Any] = {
+            "text": req.text,
+            "voice": req.voice,
+            "format": req.format,
+            "rate": req.rate,
+            "pitch": req.pitch,
         }
-        if req.pitch is not None:
-            # 音调是可选参数：没设就不下发，避免端点因为多出来的字段拒收
-            payload["parameters"]["pitch"] = req.pitch
+        if req.instruction:
+            tts_input["instruction"] = req.instruction
+        payload: dict[str, Any] = {"model": model, "input": tts_input}
 
         client = await self._get_client()
         try:
@@ -150,18 +167,24 @@ class DashScopeTTSProvider:
             ) from e
 
         if resp.status_code != 200:
+            details = {"status": resp.status_code, "body": resp.text[:500]}
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                raise TTSFailedException(
+                    f"Qwen-Audio-TTS 拒绝本次请求（{resp.status_code}），"
+                    "请检查音色名、模型名与 API Key",
+                    details=details,
+                )
             raise TTSFailedException(
-                f"DashScope TTS 返回 {resp.status_code}",
-                details={"body": resp.text[:500]},
+                f"Qwen-Audio-TTS 返回 {resp.status_code}",
+                details=details,
             )
 
         data = resp.json()
         audio_url = self._extract_audio_url(data)
-        duration_ms = self._extract_duration_ms(data)
 
         if not audio_url:
             raise TTSFailedException(
-                "DashScope TTS 未返回音频 URL",
+                "Qwen-Audio-TTS 未返回音频 URL",
                 details={"raw": str(data)[:500]},
             )
 
@@ -173,28 +196,26 @@ class DashScopeTTSProvider:
 
         return AudioResult(
             audioUrl=self._media_url(filename),
-            durationMs=duration_ms or self._estimate_duration_ms(req.text),
+            durationMs=self._estimate_duration_ms(req.text),
             localPath=str(local_path),
             format=audio_format,
         )
 
     def _extract_audio_url(self, data: dict) -> str | None:
-        output = data.get("output") or {}
-        # DashScope 实际字段以官方文档为准，这里做兼容式提取
-        for key in ("audio_url", "audioUrl", "url"):
-            if output.get(key):
-                return output[key]
-        return None
+        """非流式响应的音频在 output.audio.url。
 
-    def _extract_duration_ms(self, data: dict) -> int:
+        该 URL 只有 24 小时有效期 —— 必须立刻下载落盘，绝不能把它直接存进业务表。
+        """
         output = data.get("output") or {}
-        for key in ("duration_ms", "durationMs"):
-            if output.get(key):
-                return int(output[key])
-        return 0
+        audio = output.get("audio") or {}
+        url = audio.get("url")
+        return url or None
 
     def _estimate_duration_ms(self, text: str) -> int:
-        """粗略估算：中文约 4 字/秒。"""
+        """官方非流式响应不返回音频时长，这里按中文约 4 字/秒粗略估算。
+
+        精确时长由播放端以 audio.currentTime / loadedmetadata 为准（契约要求）。
+        """
         return max(1, len(text)) * 250
 
     async def _download_audio(self, audio_url: str) -> bytes:

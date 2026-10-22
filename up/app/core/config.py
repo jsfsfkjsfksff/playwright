@@ -35,15 +35,25 @@ class Settings(BaseSettings):
     llm_timeout: float = 60.0
     llm_max_retries: int = 3
 
+    # 世界线 LLM（configs/providers.yaml 的 aliyun_maas）。
+    # 这里显式声明，是为了让 .env 里的 ALIYUN_MAAS_API_KEY 被 pydantic 读进来：
+    # os.environ 里没有它，config_loader 读不到环境变量时会回落到这个字段。
+    aliyun_maas_api_key: str = ""
+
     # ---------- TTS 通用参数 ----------
-    tts_default_voice: str = "zh-CN-xiaoxiao"
+    # 音色取值见百炼「Qwen-Audio-TTS 音色列表」，不是 Azure 的 zh-CN-xxx 命名
+    tts_default_voice: str = "longanhuan_v3.1"
     tts_default_rate: float = 1.0
     tts_timeout: float = 60.0
+    # 批量合成并发上限：一次生成几十幕时不加限制会同时打出几十个请求，DashScope 会限流
+    tts_max_concurrency: int = 4
 
-    # ---------- TTS provider（DashScope 原生接口） ----------
-    dashscope_tts_api_key: str | None = None
-    dashscope_tts_base_url: str = "https://dashscope.aliyuncs.com"
-    dashscope_tts_model: str = "qwen-tts"
+    # Qwen-Audio-TTS：走「业务空间」专属域名，形如
+    # https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1
+    # 留空时 provider 会抛出明确的 ConfigException，而不是打到错误地址上
+    dashscope_tts_base_url: str = ""
+    dashscope_tts_model: str = "qwen-audio-3.1-tts-flash"
+    dashscope_tts_api_key: str = ""
 
     # ---------- Agent ----------
     agent_default_model_alias: str = "podcaster"

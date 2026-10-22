@@ -44,6 +44,7 @@ const middleX = viewBoxWidth / 2
 <template>
   <svg
     class="nw-audio-spectrum"
+    :class="{ 'nw-audio-spectrum--animated': animated }"
     :x="x"
     :y="y"
     :width="width"
@@ -149,9 +150,13 @@ const middleX = viewBoxWidth / 2
     var(--nw-spectrum-delay, 0s) infinite;
 }
 
+/* 柔光层同样只在 animated=true 时呼吸：否则「静态」的球体里仍有光在起伏 */
 .nw-audio-spectrum__glow {
   transform-box: fill-box;
   transform-origin: center;
+}
+
+.nw-audio-spectrum--animated .nw-audio-spectrum__glow {
   animation: nw-spectrum-glow var(--nw-duration-breathe) var(--nw-ease-in-out) infinite;
 }
 
@@ -180,7 +185,7 @@ const middleX = viewBoxWidth / 2
 
 @media (prefers-reduced-motion: reduce) {
   .nw-audio-spectrum__bar--animated,
-  .nw-audio-spectrum__glow {
+  .nw-audio-spectrum--animated .nw-audio-spectrum__glow {
     animation: none;
   }
 }

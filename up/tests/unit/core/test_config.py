@@ -24,6 +24,10 @@ ENV_NAMES = [
     "TTS_DEFAULT_VOICE",
     "TTS_DEFAULT_RATE",
     "TTS_TIMEOUT",
+    "TTS_MAX_CONCURRENCY",
+    "DASHSCOPE_TTS_BASE_URL",
+    "DASHSCOPE_TTS_MODEL",
+    "DASHSCOPE_TTS_API_KEY",
     "AGENT_DEFAULT_MODEL_ALIAS",
 ]
 
@@ -51,8 +55,13 @@ def test_defaults(clean_env):
     assert config.llm_timeout == 60.0
     assert config.llm_max_retries == 3
     assert config.tts_timeout == 60.0
-    assert config.tts_default_voice == "zh-CN-xiaoxiao"
+    assert config.tts_default_voice == "longanhuan_v3.1"
     assert config.tts_default_rate == 1.0
+    assert config.tts_max_concurrency == 4
+    # Qwen-Audio-TTS 的域名含业务空间 ID，无法给默认值；密钥同理
+    assert config.dashscope_tts_base_url == ""
+    assert config.dashscope_tts_model == "qwen-audio-3.1-tts-flash"
+    assert config.dashscope_tts_api_key == ""
     assert config.agent_default_model_alias == "podcaster"
 
 

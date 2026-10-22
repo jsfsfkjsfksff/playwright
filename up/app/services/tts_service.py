@@ -1,12 +1,25 @@
 import asyncio
 
+from app.core.config import settings
 from app.core.exceptions import TTSProviderNotFoundException
 from app.core.logging import get_logger
 from app.domain.tts.models import AudioResult, TTSInput
 from app.infra.tts.registry import TTSRegistry, build_default_registry
-from app.infra.tts.voice_map import VoiceMap, load_voice_map
+from app.infra.tts.voice_map import VoiceMap, load_voice_map, resolve_timbre_alias
 
 logger = get_logger(__name__)
+
+
+def _with_real_voice(req: TTSInput) -> TTSInput:
+    """把前端音色标识（elder-warm）换成百炼真实音色名；未收录的原样返回。
+
+    契约约定前端传的是"稳定标识"，翻译成引擎真实发音人名是后端的责任。
+    不翻译就会被百炼拒掉（400 InvalidParameter / [cosyvoice:]Engine error [411]）。
+    """
+    voice = resolve_timbre_alias(req.voice)
+    if voice == req.voice:
+        return req
+    return req.model_copy(update={"voice": voice})
 
 
 class TTSService:
@@ -43,10 +56,17 @@ class TTSService:
         return TTSInput(**params)
 
     async def synthesize(self, req: TTSInput) -> AudioResult:
-        return await self.provider.synthesize(req)
+        return await self.provider.synthesize(_with_real_voice(req))
 
     async def synthesize_batch(self, inputs: list[TTSInput]) -> list[AudioResult]:
-        return await asyncio.gather(*(self.synthesize(i) for i in inputs))
+        """批量合成，返回结果与输入同序。并发上限受 settings.tts_max_concurrency 约束。"""
+        semaphore = asyncio.Semaphore(settings.tts_max_concurrency)
+
+        async def _one(req: TTSInput) -> AudioResult:
+            async with semaphore:
+                return await self.synthesize(req)
+
+        return list(await asyncio.gather(*(_one(i) for i in inputs)))
 
     async def synthesize_many(self, inputs: list[TTSInput]) -> list[AudioResult | None]:
         """并发合成多条；单条失败记 None 并继续，不连累其它片段。"""

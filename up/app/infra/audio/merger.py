@@ -14,6 +14,9 @@ logger = get_logger(__name__)
 _ID3V2_HEADER_SIZE = 10
 _ID3V1_SIZE = 128
 
+# 导出时相邻两段之间的静音间隔：太短听起来像抢话，太长又会拖节奏
+DEFAULT_SEGMENT_GAP_MS = 800
+
 # MPEG 版本（帧头中的 version 位）-> 采样率表
 _SAMPLE_RATES = {
     3: (44100, 48000, 32000),  # MPEG 1
@@ -106,13 +109,47 @@ def mp3_duration_ms(data: bytes) -> int:
     return int(total_ms)
 
 
-def merge_mp3_segments(segments: list[bytes]) -> bytes:
-    """按顺序拼接多个 MP3 片段。
+def _silent_gap(previous_body: bytes, gap_ms: int) -> bytes:
+    """按前一片段的帧参数，生成约 gap_ms 长的静音帧序列。
+
+    MP3 没有「空字节即静音」的概念：直接填零字节会破坏帧同步。
+    这里复制前一帧的帧头（清掉 padding 位保证帧长自洽），数据区全 0 ——
+    侧信息与 main_data 全零会被解码器还原成静音，且不产生爆音。
+    """
+    if gap_ms <= 0:
+        return b""
+
+    frame = _frame_at(previous_body, 0)
+    if frame is None:
+        return b""
+
+    frame_size, samples, sample_rate = frame
+    header = bytearray(previous_body[:4])
+    padding = (header[2] >> 1) & 0x01
+    header[2] &= 0xFD  # padding = 0，静音帧长度才和帧头声明一致
+    silent_size = frame_size - padding
+
+    frame_ms = samples * 1000.0 / sample_rate
+    frame_count = max(1, round(gap_ms / frame_ms))
+    silent_frame = bytes(header) + bytes(silent_size - 4)
+    return silent_frame * frame_count
+
+
+def merge_mp3_segments(
+    segments: list[bytes],
+    gap_ms: int = DEFAULT_SEGMENT_GAP_MS,
+) -> bytes:
+    """按顺序拼接多个 MP3 片段，并在片段之间插入自然停顿。
 
     任一片段识别不出 MP3 帧都会抛 AudioFormatUnsupportedException：
     宁可让调用方收到明确错误，也不要把非音频内容混进结果里。
+
+    `gap_ms` 是相邻两段的静音间隔，默认 800ms（对话/旁白之间听起来不赶）。
+    传 0 则退化为原来的纯字节首尾相接。
     """
     merged = bytearray()
+    previous_body: bytes | None = None
+
     for index, raw in enumerate(segments):
         body = strip_tags(raw)
         if _frame_at(body, 0) is None:
@@ -120,5 +157,11 @@ def merge_mp3_segments(segments: list[bytes]) -> bytes:
                 f"第 {index + 1} 段不是有效的 MP3 音频",
                 details={"index": index, "sizeBytes": len(raw)},
             )
+
+        if previous_body is not None:
+            merged.extend(_silent_gap(previous_body, gap_ms))
+
         merged.extend(body)
+        previous_body = body
+
     return bytes(merged)

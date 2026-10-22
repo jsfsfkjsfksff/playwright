@@ -5,19 +5,21 @@
  * 不包含任何服务端实现。
  *
  * 环境变量（可选，写在 .env.local 中）：
+ *   VITE_API_BASE_URL   后端接口基址。留空表示后端尚未接入。
  *   VITE_API_MOCK       是否使用本地模拟响应：'true' | 'false'，默认 true。
- *   VITE_API_BASE_URL   后端接口基址（可选）。留空表示**与前端同源**：
- *                       开发态由 vite.config.ts 的 /api 代理转发到本机 8080，
- *                       生产态由同域部署（Nginx / 网关）承担。
  *
  * 两种运行状态（判定只发生在本文件，其它模块不许自己拼条件）：
- *   1. **真实后端**：VITE_API_MOCK=false
- *      → services 层发真实请求；后端尚未实现的接口仍走 Mock（见 services/studio.ts 的 NO_BACKEND）。
+ *   1. **真实后端**：VITE_API_BASE_URL 非空 且 VITE_API_MOCK=false
+ *      → services 层发真实请求；
  *   2. **演示模式（Mock）**：其余情况（含「什么都没配置」这个默认状态）
- *      → services 层返回本地 Mock 数据，界面链路可以完整走通。
+ *      → services 层返回本地 Mock 数据（src/services/mock/），界面链路可以完整走通。
+ *   两种状态由下面的 API_IS_CONFIGURED / API_DEMO_MODE 表达，二者互斥且穷尽。
  *
- * ⚠️ 唯一的开关是 VITE_API_MOCK=false。base URL 只在前后端不同源时才需要填 ——
- *    同源（含开发态走 Vite 代理）时留空即可，此时请求路径就是 /api/v1/*。
+ * ⚠️ 陷阱（已经踩过一次）：只填 VITE_API_BASE_URL 而不显式写 VITE_API_MOCK=false，
+ *    仍然算演示模式 —— 因为 mock 的默认值是 true。接入真实后端时两个都要写。
+ *
+ * TODO: 待后端接入，当前为演示用 Mock。假数据集中在 src/services/mock/，
+ *       接入时把 services 里的 isStudioMockMode 分支去掉即可，界面代码无需改动。
  */
 
 function readBooleanFlag(value: string | undefined, fallback: boolean): boolean {
@@ -27,14 +29,14 @@ function readBooleanFlag(value: string | undefined, fallback: boolean): boolean 
   return value === 'true'
 }
 
-/** 接口基址（去掉结尾斜杠，避免拼接出双斜杠）；留空 = 同源 */
+/** 接口基址（去掉结尾斜杠，避免拼接出双斜杠） */
 export const API_BASE_URL: string = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
 /** 是否启用本地模拟响应 */
 export const API_USE_MOCK: boolean = readBooleanFlag(import.meta.env.VITE_API_MOCK, true)
 
-/** 是否按真实后端运行（唯一判定入口）：VITE_API_MOCK=false 即为真 */
-export const API_IS_CONFIGURED: boolean = !API_USE_MOCK
+/** 是否已配置真实后端（唯一判定入口） */
+export const API_IS_CONFIGURED: boolean = API_BASE_URL.length > 0 && !API_USE_MOCK
 
 /**
  * 是否处于「演示模式（Mock 数据）」。

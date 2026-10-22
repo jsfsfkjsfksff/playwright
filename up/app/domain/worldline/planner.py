@@ -5,6 +5,11 @@ from typing import Any, Protocol
 from app.core.constants import ModelAlias
 from app.core.logging import get_logger
 from app.domain.worldline.constraints import WorldGraphConstraints, build_constraints
+from app.domain.worldline.fixed_route import (
+    DEFAULT_QUALITY_SCORE,
+    FixedRoutePlan,
+    identify_fixed_segments,
+)
 from app.domain.worldline.models import (
     InterpolateRequest,
     TrellisGraphResponse,
@@ -54,17 +59,38 @@ def _build_prompt(
     req: InterpolateRequest,
     constraints: WorldGraphConstraints,
     waypoints: list[dict[str, str]],
+    fixed_plan: FixedRoutePlan | None = None,
 ) -> str:
-    """【核心】：要求大模型运用 HTN 思想，按任务段一次性深度优先生成候选剧情。"""
+    """【核心】：要求大模型运用 HTN 思想，按任务段一次性深度优先生成候选剧情。
+
+    第六代：用户已经固定的直连段（`[[USER_FIXED]]`）不进入生成清单，
+    AI 只补齐 needAi = True 的缺失连接段。
+    """
     segments_desc = []
     for i in range(len(waypoints) - 1):
         u, v = waypoints[i], waypoints[i + 1]
+        if fixed_plan is not None and not fixed_plan.needs_ai(u["id"], v["id"]):
+            continue
         segments_desc.append(
-            f"任务段 {i + 1}: 从【{u['id']}】({u['text']}) 推进到【{v['id']}】({v['text']})"
+            f"任务段 {len(segments_desc) + 1}: 从【{u['id']}】({u['text']}) 推进到【{v['id']}】({v['text']})"
         )
 
     chain_str = " → ".join([w["id"] for w in waypoints])
     segments_prompt_str = "\n    ".join(segments_desc)
+
+    # 把用户固定剧情原文交给模型：它必须理解上下文，但一个字都不能改写
+    fixed_section = ""
+    if fixed_plan is not None and fixed_plan.main_segments:
+        fixed_lines = [
+            f"    {seg.fromSceneId} --[{seg.marked_action}]--> {seg.toSceneId}"
+            for seg in fixed_plan.main_segments
+        ]
+        fixed_section = f"""
+    【用户固定剧情（无条件保留，禁止改写/删除，禁止在两端之间插入过渡节点）】：
+{chr(10).join(fixed_lines)}
+    这些固定段已经在画布上连通，你**不要**为它们生成任何中间剧情；
+    只需要补齐上面列出的缺失任务段，并让 AI 剧情自然承接固定剧情的台词。
+    """
 
     return f"""
     你是一个受知识图谱与硬约束校验器严格监管的 Galgame 叙事规划引擎。
@@ -80,7 +106,9 @@ def _build_prompt(
     【初始关系图状态 (HOLDS / LOCATED_AT / ENEMY_OF)】：
     {json.dumps(constraints.initial_state, ensure_ascii=False)}
 
-    请分别为以下任务段生成候选过渡剧情（每段 {req.layers} 层，每层 {req.maxActions} 个分支）：
+    {fixed_section}
+
+    请为下面这些**缺失连接段**生成候选过渡剧情（每段 {req.layers} 层，每层 {req.maxActions} 个分支）：
     {segments_prompt_str}
 
     ⚠️【关系图状态演进与结构化动作铁律】：
@@ -147,55 +175,75 @@ def _assemble_layers(
     htn_data: dict,
     waypoints: list[dict[str, str]],
     expected_pairs: list[tuple[str, str]],
+    fixed_plan: FixedRoutePlan | None = None,
 ) -> list[list[dict]]:
-    """把 LLM 返回的分段剧情摊平成逐层候选，并在段间插入必经锚点。"""
+    """把 LLM 返回的分段剧情摊平成逐层候选，并在段间插入必经锚点。
+
+    第六代：
+      - `needAi = False` 的固定段**不生成任何中间层**，直接由锚点层相邻锁定；
+      - 固定段进入的锚点标 `userFixed`，并把 `[[USER_FIXED]]` 动作原样带上，
+        供校验器跳过硬约束、供 Java 落库时识别；
+      - 锚点与 AI 节点统一使用基准质量分 8.0（固定不等于最优）。
+    """
     mandatory_states = htn_data.get("mandatoryNodeStates", {})
     segments = htn_data.get("segments", [])
     mandatory_lookup = {m.sceneId: m for m in req.mandatoryNodes}
     unified_layers: list[list[dict]] = []
 
+    # LLM 只按「缺失段」返回 segments，所以取用时用独立游标，不能用段号直取
+    ai_cursor = 0
+
     for seg_idx, (exp_from, exp_to) in enumerate(expected_pairs):
-        seg_obj = (
-            segments[seg_idx]
-            if seg_idx < len(segments)
-            else {"from": exp_from, "to": exp_to, "layers": []}
-        )
+        need_ai = fixed_plan is None or fixed_plan.needs_ai(exp_from, exp_to)
         from_text = waypoints[seg_idx]["text"].strip()
         to_text = waypoints[seg_idx + 1]["text"].strip()
 
-        for l_idx, layer in enumerate(seg_obj.get("layers", [])):
-            for n_idx, node in enumerate(layer):
-                node["sceneId"] = f"SCENE_S{seg_idx + 1}_L{l_idx + 1}_{n_idx + 1}_{uuid.uuid4().hex[:4]}"
-                node["isMandatory"] = False
-                t = node.get("text", "").strip()
-                # 严禁复读任务段首尾锚点原句
-                if from_text and len(from_text) > 4 and from_text in t:
-                    t = t.replace(from_text, "").strip()
-                if to_text and len(to_text) > 4 and to_text in t:
-                    t = t.replace(to_text, "").strip()
-                node["text"] = t if t else "……四周静得只能听见呼吸声。"
-            if layer:
-                unified_layers.append(layer)
+        if need_ai:
+            seg_obj = (
+                segments[ai_cursor]
+                if ai_cursor < len(segments)
+                else {"from": exp_from, "to": exp_to, "layers": []}
+            )
+            ai_cursor += 1
 
+            for l_idx, layer in enumerate(seg_obj.get("layers", [])):
+                for n_idx, node in enumerate(layer):
+                    node["sceneId"] = (
+                        f"SCENE_S{seg_idx + 1}_L{l_idx + 1}_{n_idx + 1}_{uuid.uuid4().hex[:4]}"
+                    )
+                    node["isMandatory"] = False
+                    t = node.get("text", "").strip()
+                    # 严禁复读任务段首尾锚点原句
+                    if from_text and len(from_text) > 4 and from_text in t:
+                        t = t.replace(from_text, "").strip()
+                    if to_text and len(to_text) > 4 and to_text in t:
+                        t = t.replace(to_text, "").strip()
+                    node["text"] = t if t else "……四周静得只能听见呼吸声。"
+                if layer:
+                    unified_layers.append(layer)
+
+        # 锚点层：无论这一段是 AI 补的还是用户固定的，终点锚点都要进图层
         if exp_to != "END" and exp_to in mandatory_lookup:
             m_info = mandatory_lookup[exp_to]
             m_cfg = mandatory_states.get(exp_to, {})
-            unified_layers.append(
-                [
-                    {
-                        "sceneId": m_info.sceneId,
-                        "action": m_cfg.get("entryAction", f"推进：{m_info.goal or '继续'}"),
-                        "closingAction": "揭晓结局",
-                        "speaker": m_info.speaker,
-                        "text": m_info.text,
-                        "qualityScore": 10.0,
-                        "tension": m_cfg.get("tension", 6),
-                        "preconditions": m_cfg.get("preconditions", {}),
-                        "structuredActions": m_cfg.get("structuredActions", []),
-                        "isMandatory": True,
-                    }
-                ]
-            )
+            fixed_action = fixed_plan.fixed_action_for(exp_to) if fixed_plan else None
+            anchor_node: dict[str, Any] = {
+                "sceneId": m_info.sceneId,
+                "action": fixed_action
+                or m_cfg.get("entryAction", f"推进：{m_info.goal or '继续'}"),
+                "closingAction": "揭晓结局",
+                "speaker": m_info.speaker,
+                "text": m_info.text,
+                "qualityScore": DEFAULT_QUALITY_SCORE,
+                "tension": m_cfg.get("tension", 6),
+                "preconditions": m_cfg.get("preconditions", {}),
+                "structuredActions": m_cfg.get("structuredActions", []),
+                "isMandatory": True,
+            }
+            if fixed_action is not None:
+                # 用户固定进入该锚点：校验器直接信任用户，不做硬约束检查
+                anchor_node["userFixed"] = True
+            unified_layers.append([anchor_node])
 
     return unified_layers
 
@@ -243,9 +291,12 @@ class WorldlinePlanner:
         ]
         chain_str = " → ".join(w["id"] for w in waypoints)
 
+        # 2. 识别用户固定剧情：主干直连段不进 AI 生成清单，其余保留为可选分支
+        fixed_plan = identify_fixed_segments(req.transitions, [w["id"] for w in waypoints])
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _build_prompt(req, constraints, waypoints)},
+            {"role": "user", "content": _build_prompt(req, constraints, waypoints, fixed_plan)},
         ]
 
         try:
@@ -254,8 +305,10 @@ class WorldlinePlanner:
                 chain=chain_str,
                 characters=len(constraints.characters),
                 items=len(constraints.items),
+                fixed_segments=len(fixed_plan.main_segments),
+                optional_fixed=len(fixed_plan.optional_segments),
             )
-            # 2. 生成候选剧情（走项目统一 LLM 网关，含 provider 降级）
+            # 3. 生成候选剧情（走项目统一 LLM 网关，含 provider 降级）
             result = await self._llm.chat(
                 model_alias=self._model_alias,
                 messages=messages,
@@ -265,17 +318,29 @@ class WorldlinePlanner:
             )
             htn_data = _parse_llm_json(result.content)
             target_pre: dict[str, Any] = htn_data.get("targetPreconditions", {})
-            unified_layers = _assemble_layers(req, htn_data, waypoints, expected_pairs)
+            unified_layers = _assemble_layers(
+                req, htn_data, waypoints, expected_pairs, fixed_plan
+            )
 
-            # 3. 硬约束校验 + 全局 DP；严格模式下断路则降级为软约束寻优
+            # 4. 硬约束校验 + 全局 DP；严格模式下断路则降级为软约束寻优
             logger.info("worldline_validating", layers=len(unified_layers))
             graph = solve_story_trellis(
-                constraints, target_pre, unified_layers, strict_mode=True
+                constraints,
+                target_pre,
+                unified_layers,
+                strict_mode=True,
+                fixed_segments=fixed_plan.main_segments,
+                optional_fixed_segments=fixed_plan.optional_segments,
             )
             if not graph.edges:
                 logger.warning("worldline_strict_dead_end")
                 graph = solve_story_trellis(
-                    constraints, target_pre, unified_layers, strict_mode=False
+                    constraints,
+                    target_pre,
+                    unified_layers,
+                    strict_mode=False,
+                    fixed_segments=fixed_plan.main_segments,
+                    optional_fixed_segments=fixed_plan.optional_segments,
                 )
 
             logger.info("worldline_planned", nodes=len(graph.nodes), edges=len(graph.edges))

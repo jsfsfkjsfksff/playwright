@@ -2,13 +2,14 @@
  * 创作台状态（Pinia）
  * ---------------------------------------------------------------
  * 管理三块状态：资源（resources）、剧情锚点（anchors）、配音配置（voices）。
+ * 配音配置的**唯一入口现在是播放页的音色选择**（POST /voices）；创作台侧的
+ * 配音配置弹窗已随音色选择迁移一并删除，因此这里只保留读写「最近一次提交/回显」的能力。
  *
  * 关于「演示模式（Mock）」时的行为（本 store 最重要的约定）：
  *   - 本 store **不区分数据来源**：它只管调用 services 层，由 services 决定发真实请求
  *     还是返回本地假数据（见 services/studio.ts 的 isStudioMockMode）。
  *     这样接入真实后端时，本文件与所有组件都不需要改动。
- *   - 唯一的例外是 loadVoice 的演示模式早退（见该函数注释），以及用于界面提示的
- *     demoMode；两者都只是为了让界面说的话与事实一致。
+ *   - 唯一的例外是用于界面提示的 demoMode，它只是为了让界面说的话与事实一致。
  *   - 演示模式的数据由假后端保存进浏览器 localStorage（见 services/mock/studioBackend.ts），
  *     因此刷新页面后资源与锚点仍在；界面上会如实说明这一点。
  *
@@ -36,9 +37,11 @@ import {
   isStudioMockMode,
   listProperties,
   readMockAnchors,
+  readMockEdges,
   saveSceneAnchors,
   saveVoiceConfig,
   syncMockAnchors,
+  syncMockEdges,
   updateProperty,
 } from '@/services/studio'
 import type {
@@ -50,11 +53,13 @@ import type {
   PropertyCreateResult,
   PropertyListItem,
   PropertyResponse,
+  PropertyType,
   PropertyUpdatePayload,
   SceneAnchor,
   SceneAnchorPatch,
+  StoryEdge,
+  StoryGraphPayload,
   VoiceConfig,
-  VoiceConfigData,
 } from '@/types/studio'
 import { PROPERTY_TYPES } from '@/utils/studioVocabulary'
 
@@ -63,9 +68,7 @@ const TYPE_ORDER = PROPERTY_TYPES
 
 /**
  * 回执是否是一个可用的配音配置。
- * 后端结构由我们定义（VoiceConfigData），但保存回执仍可能是 null / 空对象，
- * 因此只有确实带回 voiceName 时才采信它，否则以刚提交的内容为准 ——
- * 不然后端回 null 时，一次成功的保存会被界面显示成「未配置」。
+ * 契约未定义 POST /voices 的返回体，因此不能假定它一定回传完整配置对象。
  */
 function isVoiceConfig(value: unknown): value is VoiceConfig {
   if (value === null || typeof value !== 'object') {
@@ -73,7 +76,7 @@ function isVoiceConfig(value: unknown): value is VoiceConfig {
   }
 
   const candidate = value as Partial<VoiceConfig>
-  return typeof candidate.voiceName === 'string'
+  return typeof candidate.characterId === 'string' && typeof candidate.voiceName === 'string'
 }
 
 export const useStudioStore = defineStore('studio', () => {
@@ -86,11 +89,14 @@ export const useStudioStore = defineStore('studio', () => {
   /** 剧情锚点（时间线）：由操作编辑页维护，提交走 POST /plan/anchors */
   const anchors = ref<SceneAnchor[]>([])
 
+  /** 配音配置：按 characterId 索引 */
+  const voices = ref<Record<string, VoiceConfig>>({})
+
   /**
-   * 全篇唯一的配音配置。
-   * null = 还没读过；读取后即使后端从未配置过也会拿到默认值（configured = false）。
+   * 剧情连线（**扁平结构**：只有 id 引用，不嵌套节点数据）。
+   * 与 anchors 一起构成「点集 + 边集」，提交时组装成 StoryGraphPayload。
    */
-  const voice = ref<VoiceConfigData | null>(null)
+  const edges = ref<StoryEdge[]>([])
 
   /** 初始加载中 */
   const loading = ref(false)
@@ -120,28 +126,34 @@ export const useStudioStore = defineStore('studio', () => {
   /** 是否处于演示模式（Mock 数据）—— 来自 services 层的唯一判定，UI 据此提示用户 */
   const demoMode = computed(() => isStudioMockMode)
 
-  /**
-   * 配音是否是用户真的配过的。
-   * false 表示当前显示的是后端默认值，界面据此说明「还没配过」，
-   * 不把默认音色说成用户的选择。
-   */
-  const voiceConfigured = computed(() => voice.value?.configured === true)
-
   const resourceCount = computed(() => resources.value.length)
   const anchorCount = computed(() => anchors.value.length)
 
-  /** 按类型分组，供资源面板直接 v-for 渲染 */
-  const resourceGroups = computed(() =>
-    TYPE_ORDER.map((type) => ({
+  /** 连线数量（画布上的边） */
+  const edgeCount = computed(() => edges.value.length)
+
+  /**
+   * 按类型分组，供资源面板直接 v-for 渲染。
+   *
+   * 先排契约三类（角色 → 规则 → 实体），再把**三类之外**的取值各自成组追加在后面。
+   * 为什么必须有这段兜底：后端落库时并不校验 type —— 自动创建的关联实体默认是
+   * `ITEM`，调用方也可能直接传 `LOCATION`。如果只按契约三类分组，这些资源会
+   * 匹配不到任何分组，在界面上**整条消失**（库里明明有，看起来像「没读到」）。
+   */
+  const resourceGroups = computed(() => {
+    const groupOf = (type: string) => ({
       type,
       items: resources.value.filter((item) => item.type === type),
-    })),
-  )
+    })
 
-  /** 角色名列表：锚点「说话人」下拉的数据来源（只取 CHARACTER 类型资源） */
-  const characters = computed(() =>
-    resources.value.filter((item) => item.type === 'CHARACTER').map((item) => item.name),
-  )
+    const extraTypes = [
+      ...new Set(resources.value.map((item) => item.type as string)),
+    ]
+      .filter((type) => !TYPE_ORDER.includes(type as PropertyType))
+      .sort()
+
+    return [...TYPE_ORDER.map(groupOf), ...extraTypes.map(groupOf)]
+  })
 
   /**
    * 时间线分组：按 timeStage 升序（契约：数值越小时间越靠前）。
@@ -165,12 +177,38 @@ export const useStudioStore = defineStore('studio', () => {
   })
 
   /**
+   * 提交给后端的图数据（**扁平双 List**）：
+   *   { nodes: [...], edges: [...] }
+   * nodes 里没有任何子节点，edges 里没有任何节点数据 —— 关系只靠 id 引用。
+   * 坐标缺失（例如刚新增、还没在画布上落位）时按 0 提交，由画布先落位再保存。
+   */
+  const storyGraph = computed<StoryGraphPayload>(() => ({
+    nodes: anchors.value.map((anchor) => ({
+      sceneId: anchor.sceneId,
+      // 卡片名称随 nodes 提交（需求 1）：创作者改过的标题必须能存到后端
+      cardName: anchor.cardName,
+      x: Math.round(anchor.x ?? 0),
+      y: Math.round(anchor.y ?? 0),
+      text: anchor.text,
+      speaker: anchor.speaker,
+      audioURL: anchor.audioURL,
+      timeStage: anchor.timeStage,
+    })),
+    edges: edges.value.map((edge) => ({ ...edge })),
+  }))
+
+  /**
    * 清空失败原因。
    * lastError 是所有写操作共用的一条状态，打开某个面板（生成 / 导出）前先清掉，
    * 否则弹窗里会显示上一个操作留下的错误，看起来像是这次操作失败了。
    */
   function clearError(): void {
     lastError.value = null
+  }
+
+  /** 取某个角色的配音配置；没有则返回 null */
+  function voiceOf(characterId: string): VoiceConfig | null {
+    return voices.value[characterId] ?? null
   }
 
   /* =============================================================
@@ -189,18 +227,32 @@ export const useStudioStore = defineStore('studio', () => {
   }
 
   /**
+   * 资源更新失败的文案。
+   * 后端当前未实现 `PUT /api/v1/properties/{nodeId}`，Spring 对未映射的方法回 405；
+   * 这里把状态码翻译成可读原因，避免用户只看到「接口返回异常状态：405」。
+   */
+  function describeUpdateError(error: unknown): string {
+    if (error instanceof ApiRequestError && (error.status === 404 || error.status === 405)) {
+      return '后端未提供资源更新接口（PUT /api/v1/properties/{nodeId}），当前无法编辑资源'
+    }
+    return describeError(error, '资源修改失败')
+  }
+
+  /**
    * 列表项 → 视图模型。
-   * 契约的列表接口只回传 `nodeId / name / type`，所以 description / attributes / status
-   * 一律置 null（含义是「后端没给这个字段」），卡片据此显示「列表接口未返回描述」，
-   * 而不是谎称「内容为空」。
+   * 列表接口回传 nodeId / name / type，并已扩展出 description / attributes，
+   * 因此这两个字段**有值就用**（刷新后能看到自己刚改的内容）；
+   * 只有后端确实没给（演示模式或未升级的后端）才置 null —— 含义是「后端没给这个字段」，
+   * 卡片据此显示「列表接口未返回描述」，而不是谎称「内容为空」。
+   * status 依旧置 null：它是写接口回执里的创建标记，列表接口本就不回传。
    */
   function fromListItem(item: PropertyListItem): PropertyResponse {
     return {
       nodeId: item.nodeId,
       type: item.type,
       name: item.name,
-      description: null,
-      attributes: null,
+      description: item.description ?? null,
+      attributes: item.attributes ?? null,
       status: null,
     }
   }
@@ -276,14 +328,16 @@ export const useStudioStore = defineStore('studio', () => {
       resources.value[index] = fromWriteResult(payload, result)
       return true
     } catch (error) {
-      lastError.value = describeError(error, '资源修改失败')
+      // ⚠️ 后端当前**没有** PUT /api/v1/properties/{nodeId}（只有 POST / GET / DELETE），
+      //    Spring 会对 PUT 回 405；这里把状态码翻译成可读原因。
+      lastError.value = describeUpdateError(error)
       return false
     } finally {
       saving.value = false
     }
   }
 
-  /** 删除资源（配音是全篇唯一配置，与资源无关，这里不做任何清理） */
+  /** 删除资源；连带清掉它的本地配音配置 */
   async function removeResource(nodeId: string): Promise<boolean> {
     saving.value = true
     lastError.value = null
@@ -291,6 +345,7 @@ export const useStudioStore = defineStore('studio', () => {
       await deleteProperty(nodeId)
 
       resources.value = resources.value.filter((item) => item.nodeId !== nodeId)
+      delete voices.value[nodeId]
       return true
     } catch (error) {
       lastError.value = describeError(error, '资源删除失败')
@@ -312,6 +367,7 @@ export const useStudioStore = defineStore('studio', () => {
    */
   function syncAnchorsForDemo(): void {
     syncMockAnchors(anchors.value)
+    syncMockEdges(edges.value)
   }
 
   /**
@@ -330,7 +386,18 @@ export const useStudioStore = defineStore('studio', () => {
     return true
   }
 
-  /** 修改锚点：只改补丁里出现的字段（sceneId 不可改） */
+  /** 系统占位 id：只有这种形态才允许用户填写一次（见 updateAnchor） */
+  const AUTO_SCENE_ID_PATTERN = /^SCENE_ANCHOR_\d+$/
+
+  /**
+   * 修改锚点：只改补丁里出现的字段。
+   *
+   * sceneId 的特殊规则 —— **一经填写就不能再修改**：
+   *   - 新建时页面给的是占位 id（SCENE_ANCHOR_xx），它还不算「填写」，
+   *     允许改成用户自己的名字，这是唯一一次；
+   *   - 一旦不是占位 id 了，再想改就直接拒绝（即使绕过 UI 调进来也一样）。
+   * 改名等于换身份，所以还要同步所有连线的端点与边 id，避免悬空边。
+   */
   function updateAnchor(sceneId: string, patch: SceneAnchorPatch): boolean {
     const index = anchors.value.findIndex((item) => item.sceneId === sceneId)
     if (index < 0) {
@@ -338,7 +405,43 @@ export const useStudioStore = defineStore('studio', () => {
       return false
     }
 
-    anchors.value[index] = { ...anchors.value[index], ...patch }
+    const nextId = patch.sceneId?.trim()
+
+    // 没改名：普通字段更新
+    if (nextId === undefined || nextId === sceneId) {
+      anchors.value[index] = { ...anchors.value[index], ...patch }
+      syncAnchorsForDemo()
+      return true
+    }
+
+    if (!AUTO_SCENE_ID_PATTERN.test(sceneId)) {
+      lastError.value = '场景 id 一经填写就不能再修改'
+      return false
+    }
+
+    if (nextId === '') {
+      lastError.value = '场景 id 不能为空'
+      return false
+    }
+
+    if (anchors.value.some((item, itemIndex) => itemIndex !== index && item.sceneId === nextId)) {
+      lastError.value = `场景 id 已存在：${nextId}`
+      return false
+    }
+
+    anchors.value[index] = { ...anchors.value[index], ...patch, sceneId: nextId, cardName: nextId }
+
+    edges.value = edges.value.map((edge) => {
+      const sourceId = edge.sourceId === sceneId ? nextId : edge.sourceId
+      const targetId = edge.targetId === sceneId ? nextId : edge.targetId
+
+      if (sourceId === edge.sourceId && targetId === edge.targetId) {
+        return edge
+      }
+
+      return { id: `EDGE_${sourceId}__${targetId}`, sourceId, targetId }
+    })
+
     syncAnchorsForDemo()
     return true
   }
@@ -346,6 +449,112 @@ export const useStudioStore = defineStore('studio', () => {
   /** 删除锚点 */
   function removeAnchor(sceneId: string): void {
     anchors.value = anchors.value.filter((item) => item.sceneId !== sceneId)
+    // 同时删掉与它相连的所有连线 —— 否则会留下指向不存在节点的「悬空边」
+    edges.value = edges.value.filter((edge) => edge.sourceId !== sceneId && edge.targetId !== sceneId)
+    syncAnchorsForDemo()
+  }
+
+  /* =============================================================
+   * 画布坐标与连线（散点式编排）
+   * -------------------------------------------------------------
+   * 语义：anchors 是「点集」，edges 是「边集」，两者都平铺，互不嵌套。
+   * 画布只负责把 anchors 的 x / y 改掉、把 edges 增删，提交时由 storyGraph
+   * 组装成两条数组 —— 因此**不存在任何树形结构**。
+   * ============================================================= */
+
+  /** 画布落位：列 = timeStage 序号，行 = 同阶段内的序号 */
+  const CANVAS_ORIGIN_X = 48
+  const CANVAS_ORIGIN_Y = 40
+  const CANVAS_COLUMN_GAP = 300
+  const CANVAS_ROW_GAP = 210
+
+  /**
+   * 给还没有坐标的锚点补一个初始位置（已落位的不动，避免每次进画布都跳位置）。
+   * 落位规则与列表视图一致：timeStage 升序 = 从左到右，同阶段自上而下。
+   */
+  function ensureAnchorPositions(): void {
+    const groups = anchorGroups.value
+    let changed = false
+
+    groups.forEach((group, column) => {
+      group.anchors.forEach((anchor, row) => {
+        if (anchor.x !== undefined && anchor.y !== undefined) {
+          return
+        }
+
+        const index = anchors.value.findIndex((item) => item.sceneId === anchor.sceneId)
+        if (index < 0) {
+          return
+        }
+
+        anchors.value[index] = {
+          ...anchors.value[index],
+          x: CANVAS_ORIGIN_X + column * CANVAS_COLUMN_GAP,
+          y: CANVAS_ORIGIN_Y + row * CANVAS_ROW_GAP,
+        }
+        changed = true
+      })
+    })
+
+    if (changed) {
+      syncAnchorsForDemo()
+    }
+  }
+
+  /** 拖拽结束：把画布坐标写回锚点（提交时就是节点的 x / y） */
+  function updateAnchorPosition(sceneId: string, x: number, y: number): void {
+    const index = anchors.value.findIndex((item) => item.sceneId === sceneId)
+    if (index < 0) {
+      return
+    }
+
+    const nextX = Math.round(x)
+    const nextY = Math.round(y)
+    const current = anchors.value[index]
+
+    if (current.x === nextX && current.y === nextY) {
+      return
+    }
+
+    anchors.value[index] = { ...current, x: nextX, y: nextY }
+    syncAnchorsForDemo()
+  }
+
+  /** 两个节点之间是否已有连线（同一方向） */
+  function hasEdge(sourceId: string, targetId: string): boolean {
+    return edges.value.some((edge) => edge.sourceId === sourceId && edge.targetId === targetId)
+  }
+
+  /**
+   * 建立一条连线。
+   * 拒绝三种情况并给出可展示的原因：自环、重复、端点不存在。
+   * 反向连线（B→A）是允许的 —— 剧情可以有双向分支。
+   */
+  function addEdge(sourceId: string, targetId: string): boolean {
+    if (sourceId === targetId) {
+      lastError.value = '不能把卡片连到它自己'
+      return false
+    }
+
+    const nodes = new Set(anchors.value.map((anchor) => anchor.sceneId))
+    if (!nodes.has(sourceId) || !nodes.has(targetId)) {
+      lastError.value = '连线两端必须是已存在的卡片'
+      return false
+    }
+
+    if (hasEdge(sourceId, targetId)) {
+      lastError.value = '这两个节点之间已经有连线了'
+      return false
+    }
+
+    edges.value.push({ id: `EDGE_${sourceId}__${targetId}`, sourceId, targetId })
+    syncAnchorsForDemo()
+    return true
+  }
+
+  /** 删除一条连线 */
+  function removeEdge(edgeId: string): void {
+    edges.value = edges.value.filter((edge) => edge.id !== edgeId)
     syncAnchorsForDemo()
   }
 
@@ -360,13 +569,18 @@ export const useStudioStore = defineStore('studio', () => {
     if (isStudioMockMode) {
       // TODO: 待后端接入，当前为演示用 Mock
       anchors.value = readMockAnchors()
+      edges.value = readMockEdges()
     }
 
     return anchors.value
   }
 
   /**
-   * 保存锚点 —— POST /api/v1/plan/anchors（契约：请求体直接是锚点数组）。
+   * 保存锚点与连线 —— POST /api/v1/plan/anchors。
+   *
+   * 请求体是**扁平双 List**（见 types/studio.ts 的 StoryGraphPayload）：
+   *   { nodes: [...], edges: [...] }
+   * 不再是把锚点数组直接当 body —— 那样连线没有地方放，只能塞进节点里（树形结构，已禁止）。
    * ⚠️ 契约未定义返回体：只有回执确实是数组时才采信它，否则保留本地锚点 ——
    *    不然后端回 null / 空对象时，一次成功的保存会把时间线清空或显示成失败。
    */
@@ -379,7 +593,7 @@ export const useStudioStore = defineStore('studio', () => {
     saving.value = true
     lastError.value = null
     try {
-      const saved = await saveSceneAnchors(anchors.value.map((anchor) => ({ ...anchor })))
+      const saved = await saveSceneAnchors(storyGraph.value)
       if (Array.isArray(saved) && saved.length > 0) {
         anchors.value = saved.map((anchor) => ({ ...anchor }))
       }
@@ -445,32 +659,44 @@ export const useStudioStore = defineStore('studio', () => {
   }
 
   /* =============================================================
-   * 配音（全篇唯一）
+   * 配音
    * ============================================================= */
 
   /**
-   * 读取全篇配音配置。
-   * 后端在「从未配置」时也返回 200 + 默认值（configured = false），
-   * 所以这里只有真正的请求失败才写 lastError —— 「还没配过」不是错误。
+   * 读取某个角色的配音配置（GET /voices/{characterId}）。
+   *
+   * ⚠️ 当前**没有调用方**：创作台侧的配音配置弹窗删除后，没有界面需要「回显某角色已存的音色」。
+   *    保留它是因为它已按契约实现、且是「进播放页预选上次保存的音色」的唯一现成入口 ——
+   *    真要接，在 PlayerView 的 onMounted 调一次即可（404 = 未配置，不报错）。
+   *    若长期不需要，与 voiceOf 一起删掉。
    */
-  async function loadVoice(): Promise<void> {
+  async function loadVoice(characterId: string): Promise<VoiceConfig | null> {
     try {
-      voice.value = await getVoiceConfig()
+      const config = await getVoiceConfig(characterId)
+      voices.value[characterId] = config
+      return config
     } catch (error) {
+      // 「这个角色还没配过音」不是错误：演示模式的假后端以 404 表示未配置，
+      // 按「未配置」返回 null 即可 —— 平白弹一条错误会让人以为功能坏了。
+      if (error instanceof ApiRequestError && error.status === 404) {
+        return null
+      }
+
       lastError.value = describeError(error, '配音配置读取失败')
+      return null
     }
   }
 
-  /** 保存全篇配音配置（全篇唯一，重复保存只更新同一条） */
+  /** 保存配音配置 */
   async function saveVoice(config: VoiceConfig): Promise<boolean> {
     saving.value = true
     lastError.value = null
     try {
+      // 契约未定义 POST /voices 的返回体：只有回执确实是配置对象时才采信它，
+      // 否则以刚提交的内容为准 —— 不然后端回 null / 空对象时，
+      // 一次成功的保存会被界面显示成「未配置」。
       const saved = await saveVoiceConfig(config)
-      // 只有回执确实带回 voiceName 时才采信它，否则以刚提交的内容为准（configured 视为 true：刚存成功）
-      voice.value = isVoiceConfig(saved)
-        ? { ...saved, configured: true }
-        : { ...config, configured: true }
+      voices.value[config.characterId] = isVoiceConfig(saved) ? saved : { ...config }
       return true
     } catch (error) {
       lastError.value = describeError(error, '配音配置保存失败')
@@ -484,7 +710,8 @@ export const useStudioStore = defineStore('studio', () => {
     // 状态
     resources,
     anchors,
-    voice,
+    edges,
+    voices,
     loading,
     saving,
     generating,
@@ -496,12 +723,14 @@ export const useStudioStore = defineStore('studio', () => {
     demoMode,
     resourceCount,
     anchorCount,
+    edgeCount,
     resourceGroups,
-    characters,
     anchorGroups,
-    voiceConfigured,
+    storyGraph,
     // 查询
+    voiceOf,
     clearError,
+    hasEdge,
     // 资源
     loadResources,
     addResource,
@@ -513,6 +742,11 @@ export const useStudioStore = defineStore('studio', () => {
     removeAnchor,
     fetchAnchors,
     saveAnchors,
+    // 画布（坐标与连线）
+    ensureAnchorPositions,
+    updateAnchorPosition,
+    addEdge,
+    removeEdge,
     // 生成与导出
     triggerInterpolate,
     exportSegment,

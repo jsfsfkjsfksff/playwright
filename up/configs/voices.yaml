@@ -3,16 +3,23 @@
 # 文档里的「语音档案」在 Java 侧是全篇唯一一条；TTS 按世界线节点上的
 # speaker 名在这里匹配音色，匹配不到就用 default。
 #
-# pitch 可以不写，不写就不给 TTS 下发该参数。
+# 注意：这里的 voice 必须是**百炼 Qwen-Audio-TTS 音色列表**里的名字
+# （如 longanhuan_v3.1），不能写 Azure 的 zh-CN-xxx —— 跨模型混用会被百炼
+# 直接拒掉：400 InvalidParameter「[cosyvoice:]Engine error [411]」。
+#
+# 前端音色标识（elder-warm 等）-> 真实音色名的映射在
+# app/infra/tts/voice_map.py 的 TIMBRE_ALIASES，与此处是两回事。
+#
+# pitch 是 [0.5, 2.0] 的倍数（1.0 为原调），不写默认 1.0。
 
 default:
-  voice: zh-CN-xiaoxiao
+  voice: longanhuan_v3.1
   rate: 1.0
 
 speakers:
   旁白:
-    voice: zh-CN-yunxi
+    voice: wenhuaizhi_v3.1
     rate: 0.95
   少女:
-    voice: zh-CN-xiaoyi
+    voice: baiqinglan_v3.1
     rate: 1.05

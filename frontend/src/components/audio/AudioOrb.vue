@@ -237,17 +237,26 @@ const NODE_RADIUS = 4.5
   overflow: visible;
 }
 
-.nw-audio-orb__core {
+/*
+ * 动画只在 animated=true 时挂载（root 上有 nw-audio-orb--animated 才匹配）。
+ * 播放页需要「完全静止」的球体：不旋转、不呼吸 —— 传 :animated="false" 即可，
+ * 而不是在页面里用 :deep 覆盖（那会把组件自身的语义做废）。
+ */
+.nw-audio-orb--animated .nw-audio-orb__core {
   animation: nw-orb-core-breathe var(--nw-duration-breathe) var(--nw-ease-in-out) infinite;
 }
 
 .nw-audio-orb__orbit {
   transform-box: view-box;
   transform-origin: center;
+}
+
+.nw-audio-orb--animated .nw-audio-orb__orbit {
   animation: nw-orbit-drift var(--nw-orbit-duration, 96s) linear infinite;
 }
 
-.nw-audio-orb__orbit--behind {
+/* 背后那段轨道更慢；选择器必须带上 --animated，否则被上一条的 animation 简写盖掉 */
+.nw-audio-orb--animated .nw-audio-orb__orbit--behind {
   animation-duration: 118s;
 }
 
@@ -282,8 +291,9 @@ const NODE_RADIUS = 4.5
     filter: none;
   }
 
-  .nw-audio-orb__orbit,
-  .nw-audio-orb__core {
+  /* 选择器要带 --animated：否则被上面同名的 animation 简写（更高优先级）盖掉 */
+  .nw-audio-orb--animated .nw-audio-orb__orbit,
+  .nw-audio-orb--animated .nw-audio-orb__core {
     animation: none;
   }
 }

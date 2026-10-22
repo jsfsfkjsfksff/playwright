@@ -32,6 +32,20 @@ class MandatoryNodeInput(BaseModel):
     goal: str = Field(default="", description="该锚点要达成的剧情节拍")
 
 
+class TransitionInput(BaseModel):
+    """前端画布上的一条**单向**剧情连线（对应后端 Transition）。
+
+    ⚠️ 第六代约定：
+      - 前端**不**把画布上的双向边对原样传过来（双向只是画布交互的识别手段）；
+      - 用户手动创建的固定分支，统一以单向边 + `action` 里携带 `[[USER_FIXED]]` 标记传入；
+      - 不带标记的边就是普通的 AI 候选路径，不参与「固定剧情」识别。
+    """
+
+    fromSceneId: str = Field(..., description="起点场景 ID")
+    toSceneId: str = Field(..., description="终点场景 ID")
+    action: str = Field(default="继续", description="连线动作（固定分支必须含 [[USER_FIXED]]）")
+
+
 class InterpolateRequest(BaseModel):
     """世界线插值输入。
 
@@ -46,6 +60,10 @@ class InterpolateRequest(BaseModel):
     maxActions: int = Field(default=2, description="每层期望的分支数")
     mandatoryNodes: list[MandatoryNodeInput] = Field(
         default_factory=list, description="有序的必经节点序列"
+    )
+    transitions: list[TransitionInput] = Field(
+        default_factory=list,
+        description="画布单向连线（含 [[USER_FIXED]] 固定分支标记）",
     )
     properties: list[PropertyInput] = Field(
         default_factory=list, description="图谱资源节点（约束来源）"

@@ -1,0 +1,293 @@
+/**
+ * Naive UI 材质覆盖层
+ * ---------------------------------------------------------------
+ * styles/naive-theme.ts 负责「颜色 / 圆角 / 字号」这类 JS 主题变量，
+ * 但玻璃拟态依赖 backdrop-filter + 多层渐变，这是 Naive 的 JS 变量表达不了的，
+ * 因此在这一层用 --nw-* 令牌补上材质，让引入的 Naive 组件与站内 GlassPanel 同源。
+ *
+ * 加载顺序：本文件必须在 Naive 自身样式之后（见 styles/index.css 的说明），
+ * 否则同权重下会被 Naive 的默认样式盖掉。
+ *
+ * 【作用域前缀】
+ *   `.nw-naive-scope` —— 常规（非 Teleport）组件，由 App.vue 根的 provider 提供。
+ *   第三方通用 class（.n-button / .n-input …）必须加作用域前缀，
+ *   否则容易与站内自有组件撞名。
+ *
+ * 【⚠️ 弹窗为什么没有作用域前缀】
+ *   弹窗 Teleport 到 body，**不落在任何页面元素的子树里**，没法用祖先 class 限定。
+ *   Naive 自己会渲染一个稳定的 `.n-modal-body-wrapper` 包住弹窗内容 ——
+ *   它就是天然的作用域锚点：只有 Naive 弹窗会产生这个 class，
+ *   站内自有弹窗（BaseModal）不会，所以「撞名」的风险本来就不存在。
+ *
+ * 【⚠️ 另一个坑：不要给 n-modal 传 class 做标记】
+ *   n-modal 内部会把 `$attrs` 的 class 合并**两次**（BodyWrapper.mjs:279），
+ *   传字符串或数组都会在 DOM 上渲染出重复 class，调用方无法避免。
+ */
+
+/* =============================================================
+ * 玻璃材质基元
+ * ============================================================= */
+
+/*
+ * 把 GlassPanel 的材质抽成一份可复用声明。
+ * 这里刻意重复 GlassPanel 里 .nw-glass-panel 的取值而不是继承：
+ * 弹窗挂在 body 下（Teleport），不在任何页面容器的祖先链里，继承不到。
+ */
+.nw-naive-scope .nw-naive-surface {
+  border: var(--nw-border-width) solid var(--nw-color-glass-edge);
+  background-color: var(--nw-color-glass-fill-strong);
+  background-image: linear-gradient(180deg, var(--nw-color-glass-highlight), transparent 62%);
+  box-shadow: var(--nw-shadow-panel);
+  backdrop-filter: blur(var(--nw-blur-md));
+  -webkit-backdrop-filter: blur(var(--nw-blur-md));
+}
+
+/* 不支持 backdrop-filter 时退回不透明底色，避免文字压在背景图上读不清 */
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .nw-naive-scope .nw-naive-surface {
+    background-color: var(--nw-color-glass-fallback);
+  }
+}
+
+/* =============================================================
+ * Modal：存读档弹窗 / 分支选择弹窗
+ * -------------------------------------------------------------
+ * 【为什么用 !important】
+ *   Naive 的样式基于它自己的 CSS 变量（--n-color-modal 等），
+ *   与我们的规则**同权重**，且变量值是在组件上内联设置的，
+ *   靠加载顺序无法稳定压过。弹窗底色正是「浅色突兀」最刺眼处，
+ *   因此显式提升优先级，而不是去猜顺序。
+ * ============================================================= */
+
+/* 弹窗实体：preset="card" 渲染成 .n-card.n-modal */
+.n-modal-body-wrapper .n-modal {
+  border: var(--nw-border-width) solid var(--nw-color-glass-edge) !important;
+  border-radius: var(--nw-radius-lg) !important;
+  background-color: var(--nw-color-glass-fill-strong) !important;
+  background-image: linear-gradient(180deg, var(--nw-color-glass-highlight), transparent 62%) !important;
+  box-shadow: var(--nw-shadow-panel) !important;
+  backdrop-filter: blur(var(--nw-blur-md));
+  -webkit-backdrop-filter: blur(var(--nw-blur-md));
+  color: var(--nw-color-text-secondary);
+}
+
+/* 遮罩：与 BaseModal / 播放页闸门共用同一个令牌，全站遮罩取色只有一处来源 */
+.n-modal-mask {
+  background-color: var(--nw-color-overlay) !important;
+  backdrop-filter: blur(var(--nw-blur-sm));
+  -webkit-backdrop-filter: blur(var(--nw-blur-sm));
+}
+
+/* 标题：卡片头（preset="card"）与对话框头（preset="dialog"）两种结构都覆盖 */
+.n-modal-body-wrapper .n-card-header__main,
+.n-modal-body-wrapper .n-modal-header__title,
+.n-modal-body-wrapper .n-dialog__title {
+  color: var(--nw-color-text-primary) !important;
+  font-weight: var(--nw-font-weight-semibold);
+  letter-spacing: var(--nw-letter-spacing-wide);
+}
+
+/* 卡片头部的分隔线，与站内面板观感一致 */
+.n-modal-body-wrapper .n-card-header {
+  border-bottom: var(--nw-border-width) solid var(--nw-color-border);
+}
+
+/*
+ * 卡片底部操作区。
+ * ⚠️ class 是 n-card__action（不是 footer）：preset="card" 渲染的是 n-card，
+ *    底部插槽名为 `action`。写 `#footer` 不报错，但内容会被静默丢弃。
+ */
+.n-modal-body-wrapper .n-card__action {
+  border-top: var(--nw-border-width) solid var(--nw-color-border);
+  background-color: transparent !important;
+}
+
+.n-modal-body-wrapper .n-card__content,
+.n-modal-body-wrapper .n-modal-body,
+.n-modal-body-wrapper .n-dialog__content {
+  color: var(--nw-color-text-secondary) !important;
+  background-color: transparent !important;
+}
+
+/* 关闭按钮：默认是深色图标，压在深底上看不见 */
+.n-modal-body-wrapper .n-card-header__close,
+.n-modal-body-wrapper .n-base-close {
+  color: var(--nw-color-text-tertiary);
+  transition: var(--nw-transition-colors);
+}
+
+.n-modal-body-wrapper .n-card-header__close:hover,
+.n-modal-body-wrapper .n-base-close:hover {
+  color: var(--nw-color-accent-contrast);
+  background-color: var(--nw-color-hover);
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .n-modal-body-wrapper .n-modal,
+  .n-modal-mask {
+    background-color: var(--nw-color-glass-fallback) !important;
+  }
+}
+
+/* =============================================================
+ * Button：让 Naive 按钮贴合站内 AppButton 的材质
+ * -------------------------------------------------------------
+ * 站内按钮是「深蓝渐变 + 亮边 + 悬停辉光」，Naive 默认是纯色填充。
+ * 只补材质与交互，尺寸仍由 Naive 自己的 size 控制。
+ * ============================================================= */
+
+.nw-naive-scope .n-button {
+  font-family: inherit;
+  transition: var(--nw-transition-interactive);
+}
+
+/* 次级 / 默认按钮：站内的玻璃底 + 描边 */
+.nw-naive-scope .n-button:not(.n-button--primary-type) {
+  background-color: var(--nw-color-button-fill-secondary) !important;
+  background-image: linear-gradient(
+    180deg,
+    var(--nw-color-button-fill-secondary-top),
+    var(--nw-color-button-fill-secondary-bottom)
+  ) !important;
+  border: var(--nw-border-width) solid var(--nw-color-border) !important;
+  color: var(--nw-color-text-secondary) !important;
+}
+
+.nw-naive-scope .n-button:not(.n-button--primary-type):hover {
+  background-color: var(--nw-color-button-fill-secondary-hover) !important;
+  border-color: var(--nw-color-border-strong) !important;
+  color: var(--nw-color-text-primary) !important;
+}
+
+/* 主按钮：站内的强调渐变 + 悬停辉光 */
+.nw-naive-scope .n-button.n-button--primary-type {
+  background-color: transparent !important;
+  background-image: linear-gradient(
+    180deg,
+    var(--nw-color-button-fill-primary-top),
+    var(--nw-color-button-fill-primary-bottom)
+  ) !important;
+  border: var(--nw-border-width) solid var(--nw-color-border-strong) !important;
+  color: var(--nw-color-on-accent) !important;
+}
+
+.nw-naive-scope .n-button.n-button--primary-type:hover {
+  background-color: var(--nw-color-button-fill-primary-hover) !important;
+  border-color: var(--nw-color-focus) !important;
+  color: var(--nw-color-text-primary) !important;
+  box-shadow: 0 0 18px var(--nw-color-accent-hover);
+}
+
+/* 焦点环与站内一致：不只靠颜色传达状态 */
+.nw-naive-scope .n-button:focus-visible {
+  outline: var(--nw-border-width-strong) solid var(--nw-color-focus);
+  outline-offset: 2px;
+}
+
+/* =============================================================
+ * Input / 表单控件
+ * -------------------------------------------------------------
+ * Naive 的输入框由「底色 + 边框层 + state-border 层」三层拼成，
+ * 因此底色与边框必须分别覆盖，只改一处会露出浅色残留。
+ * ============================================================= */
+
+.nw-naive-scope .n-input {
+  background-color: var(--nw-color-button-fill-secondary) !important;
+  border-radius: var(--nw-radius-sm);
+}
+
+.nw-naive-scope .n-input .n-input__border,
+.nw-naive-scope .n-input .n-input__state-border {
+  border: var(--nw-border-width) solid var(--nw-color-border) !important;
+  border-radius: var(--nw-radius-sm);
+  box-shadow: none !important;
+}
+
+.nw-naive-scope .n-input:not(.n-input--disabled):hover .n-input__state-border {
+  border-color: var(--nw-color-border-strong) !important;
+}
+
+.nw-naive-scope .n-input.n-input--focus .n-input__state-border {
+  border-color: var(--nw-color-focus) !important;
+  box-shadow: 0 0 0 3px var(--nw-color-accent-hover) !important;
+}
+
+/* 输入文字与占位符：默认是深色，深底上完全看不清 */
+.nw-naive-scope .n-input .n-input__input-el {
+  color: var(--nw-color-text-primary) !important;
+  font-family: inherit;
+  caret-color: var(--nw-color-focus);
+}
+
+.nw-naive-scope .n-input .n-input__placeholder {
+  color: var(--nw-color-text-disabled) !important;
+  font-family: inherit;
+}
+
+/* =============================================================
+ * Radio（音色选择）：站内是「一排胶囊按钮」
+ * ============================================================= */
+
+.nw-naive-scope .n-radio-button {
+  background-color: var(--nw-color-button-fill-secondary) !important;
+  border-color: var(--nw-color-border) !important;
+  color: var(--nw-color-text-secondary) !important;
+  transition: var(--nw-transition-colors);
+}
+
+.nw-naive-scope .n-radio-button:hover {
+  color: var(--nw-color-text-primary) !important;
+  border-color: var(--nw-color-border-strong) !important;
+}
+
+.nw-naive-scope .n-radio-button.n-radio-button--checked {
+  background-color: var(--nw-color-accent-hover) !important;
+  border-color: var(--nw-color-focus) !important;
+  color: var(--nw-color-text-primary) !important;
+}
+
+.nw-naive-scope .n-radio-button:focus-visible {
+  outline: var(--nw-border-width-strong) solid var(--nw-color-focus);
+  outline-offset: 2px;
+}
+
+/* =============================================================
+ * Card / Empty / Tag
+ * ============================================================= */
+
+/*
+ * 普通卡片（非弹窗）。
+ * 用 :not(.n-modal) 排除弹窗卡片 —— 弹窗的 .n-card.n-modal 已由上面的 Modal 段
+ * 单独处理，两个规则都命中同一个元素时容易互相覆盖，留下难查的样式冲突。
+ */
+.nw-naive-scope .n-card:not(.n-modal) {
+  border: var(--nw-border-width) solid var(--nw-color-glass-edge);
+  background-color: var(--nw-color-glass-fill);
+  background-image: linear-gradient(180deg, var(--nw-color-glass-highlight), transparent 62%);
+  color: var(--nw-color-text-secondary);
+}
+
+.nw-naive-scope .n-card:not(.n-modal) .n-card-header__main {
+  color: var(--nw-color-text-primary);
+}
+
+.nw-naive-scope .n-tag {
+  font-family: inherit;
+  letter-spacing: var(--nw-letter-spacing-wide);
+}
+
+/* Empty 的图标与文案默认偏灰暗，在深底上再压一层可读性 */
+.nw-naive-scope .n-empty .n-empty__description {
+  color: var(--nw-color-text-tertiary) !important;
+}
+
+/* =============================================================
+ * 减弱动效偏好：Naive 的过渡一并关掉，与站内其它组件保持一致
+ * ============================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .nw-naive-scope .n-button,
+  .nw-naive-scope .n-radio-button {
+    transition: none;
+  }
+}

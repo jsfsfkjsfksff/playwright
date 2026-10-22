@@ -56,6 +56,37 @@ def test_provider_without_api_key_env_is_skipped(monkeypatch, write_providers):
     assert "没有任何可用的 LLM provider" in info.value.message
 
 
+def test_api_key_falls_back_to_settings(monkeypatch, write_providers):
+    """环境变量里没有时，回落 Settings —— .env 不写进 os.environ，只靠 .env 也能启动。"""
+    monkeypatch.delenv("ALIYUN_MAAS_API_KEY", raising=False)
+    monkeypatch.setattr(config_loader.settings, "aliyun_maas_api_key", "from-dotenv")
+    path = write_providers(
+        {
+            "aliyun_maas": {
+                "base_url": "https://x.invalid/v1",
+                "api_key_env": "ALIYUN_MAAS_API_KEY",
+            }
+        }
+    )
+
+    assert load_providers(path)["aliyun_maas"].api_key == "from-dotenv"
+
+
+def test_env_var_wins_over_settings(monkeypatch, write_providers):
+    monkeypatch.setenv("ALIYUN_MAAS_API_KEY", "from-env")
+    monkeypatch.setattr(config_loader.settings, "aliyun_maas_api_key", "from-settings")
+    path = write_providers(
+        {
+            "aliyun_maas": {
+                "base_url": "https://x.invalid/v1",
+                "api_key_env": "ALIYUN_MAAS_API_KEY",
+            }
+        }
+    )
+
+    assert load_providers(path)["aliyun_maas"].api_key == "from-env"
+
+
 def test_missing_file_raises(tmp_path):
     with pytest.raises(ConfigException) as info:
         load_providers(tmp_path / "nope.yaml")
@@ -90,4 +121,5 @@ def test_real_providers_file_loads_with_keys(monkeypatch, repo_root):
         monkeypatch.setenv(env_name, "dummy")
     providers = load_providers()
     assert {"dashscope", "deepseek", "openai"} <= set(providers)
-    assert all(p.api_key == "dummy" for p in providers.values())
+    # aliyun_maas 是否出现取决于本机 .env，不参与下面的断言
+    assert all(providers[name].api_key == "dummy" for name in ("dashscope", "deepseek", "openai"))
